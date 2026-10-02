@@ -2,6 +2,7 @@
 
 // Replace the whole of routes/web.php with this file.
 
+use App\Http\Controllers\ApprovalController;
 use App\Http\Controllers\DocumentController;
 use App\Http\Controllers\ProfileController;
 use App\Http\Controllers\RequisitionController;
@@ -31,6 +32,11 @@ Route::domain('{tenant}.'.config('tenancy.domain'))
             Route::post('/requisitions/{purchaseOrder}/documents', [DocumentController::class, 'store'])->name('documents.store');
             Route::get('/documents/{poDocument}/download', [DocumentController::class, 'download'])->name('documents.download');
             Route::delete('/documents/{poDocument}', [DocumentController::class, 'destroy'])->name('documents.destroy');
+
+            Route::post('/approvals/{approval}/approve', [ApprovalController::class, 'approve'])->name('approvals.approve');
+            Route::post('/approvals/{approval}/reject', [ApprovalController::class, 'reject'])->name('approvals.reject');
+            Route::post('/approvals/{approval}/query', [ApprovalController::class, 'query'])->name('approvals.query');
+            Route::post('/approval-queries/{approvalQuery}/answer', [ApprovalController::class, 'answerQuery'])->name('approvals.queries.answer');
         });
 
         require __DIR__.'/auth.php';

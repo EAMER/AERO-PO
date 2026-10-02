@@ -166,20 +166,83 @@
             @if ($po->approvals->isNotEmpty())
                 <div class="bg-white shadow-sm sm:rounded-lg p-6">
                     <h3 class="text-sm font-semibold text-gray-700 mb-3">Approvals</h3>
-                    <ul class="space-y-2 text-sm">
+                    <div class="space-y-4">
                         @foreach ($po->approvals->sortBy(['stage', 'step_order']) as $approval)
-                            <li class="flex items-center gap-2">
-                                <span class="text-gray-400">#{{ $approval->step_order }}</span>
-                                <span class="font-medium">{{ ucwords(str_replace('_', ' ', $approval->role->value)) }}</span>
-                                <span class="text-gray-400">({{ $approval->stage }})</span>
-                                <x-status-badge :status="$approval->decision->value" />
-                                @if ($approval->decidedBy)
-                                    <span class="text-gray-400">— {{ $approval->decidedBy->name }}</span>
+                            <div class="border rounded-md p-4 {{ ($actionable[$approval->id] ?? false) ? 'border-indigo-300 bg-indigo-50/30' : 'border-gray-200' }}">
+                                <div class="flex items-center gap-2 mb-2">
+                                    <span class="text-gray-400">#{{ $approval->step_order }}</span>
+                                    <span class="font-medium">{{ ucwords(str_replace('_', ' ', $approval->role->value)) }}</span>
+                                    <span class="text-gray-400">({{ $approval->stage }})</span>
+                                    <x-status-badge :status="$approval->decision->value" />
+                                    @if ($approval->decidedBy)
+                                        <span class="text-gray-400">— {{ $approval->decidedBy->name }}</span>
+                                    @endif
+                                </div>
+
+                                {{-- Past queries on this step --}}
+                                @foreach ($approval->queries as $q)
+                                    <div class="ml-4 mb-2 text-xs bg-gray-50 border border-gray-200 rounded p-2">
+                                        <p><span class="font-medium">{{ $q->asker->name }}</span> asked <span class="font-medium">{{ $q->target->name }}</span>: {{ $q->question }}</p>
+                                        @if ($q->answer)
+                                            <p class="mt-1 text-gray-600"><span class="font-medium">{{ $q->target->name }}</span> answered: {{ $q->answer }}</p>
+                                        @elseif ($q->directed_to === auth()->id())
+                                            <form method="POST" action="{{ route('approvals.queries.answer', $q) }}" class="mt-2 flex gap-2">
+                                                @csrf
+                                                <input type="text" name="answer" required placeholder="Your answer..."
+                                                       class="flex-1 rounded-md border-gray-300 text-xs shadow-sm">
+                                                <button class="px-2 py-1 bg-gray-800 text-white text-xs rounded-md hover:bg-gray-700">Answer</button>
+                                            </form>
+                                        @else
+                                            <p class="mt-1 text-gray-400 italic">Awaiting {{ $q->target->name }}'s answer.</p>
+                                        @endif
+                                    </div>
+                                @endforeach
+
+                                {{-- Actions: approve / reject / query --}}
+                                @if ($actionable[$approval->id] ?? false)
+                                    <div class="ml-4 flex flex-wrap gap-2 mt-2" x-data="{ open: null }">
+                                        <form method="POST" action="{{ route('approvals.approve', $approval) }}">
+                                            @csrf
+                                            <button class="px-3 py-1.5 bg-green-600 text-white text-xs font-semibold rounded-md hover:bg-green-500">Approve</button>
+                                        </form>
+
+                                        <button type="button" @click="open = (open === 'reject' ? null : 'reject')"
+                                                class="px-3 py-1.5 bg-red-600 text-white text-xs font-semibold rounded-md hover:bg-red-500">
+                                            Reject
+                                        </button>
+                                        <button type="button" @click="open = (open === 'query' ? null : 'query')"
+                                                class="px-3 py-1.5 bg-yellow-500 text-white text-xs font-semibold rounded-md hover:bg-yellow-400">
+                                            Query
+                                        </button>
+
+                                        <div x-show="open === 'reject'" class="w-full mt-2">
+                                            <form method="POST" action="{{ route('approvals.reject', $approval) }}" class="flex gap-2">
+                                                @csrf
+                                                <input type="text" name="reason" required placeholder="Reason for rejecting (required)"
+                                                       class="flex-1 rounded-md border-gray-300 text-xs shadow-sm">
+                                                <button class="px-3 py-1.5 bg-red-600 text-white text-xs rounded-md hover:bg-red-500">Confirm reject</button>
+                                            </form>
+                                        </div>
+
+                                        <div x-show="open === 'query'" class="w-full mt-2">
+                                            <form method="POST" action="{{ route('approvals.query', $approval) }}" class="flex flex-wrap gap-2">
+                                                @csrf
+                                                <select name="target_user_id" required class="rounded-md border-gray-300 text-xs shadow-sm">
+                                                    <option value="">Direct to...</option>
+                                                    @foreach ($targetsByApproval[$approval->id] ?? [] as $u)
+                                                        <option value="{{ $u->id }}">{{ $u->name }} ({{ ucwords(str_replace('_', ' ', $u->role->value)) }})</option>
+                                                    @endforeach
+                                                </select>
+                                                <input type="text" name="question" required placeholder="Your question..."
+                                                       class="flex-1 rounded-md border-gray-300 text-xs shadow-sm">
+                                                <button class="px-3 py-1.5 bg-yellow-500 text-white text-xs rounded-md hover:bg-yellow-400">Send query</button>
+                                            </form>
+                                        </div>
+                                    </div>
                                 @endif
-                            </li>
+                            </div>
                         @endforeach
-                    </ul>
-                    <p class="mt-3 text-xs text-gray-400">Approve / reject / query actions live on a dedicated approvals screen (next up).</p>
+                    </div>
                 </div>
             @endif
 

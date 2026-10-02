@@ -59,13 +59,45 @@ class RequisitionController extends Controller
 
     public function show(PurchaseOrder $purchaseOrder)
     {
-        $purchaseOrder->load(['lines', 'documents.uploader', 'logs.actor', 'approvals.decidedBy']);
+        $purchaseOrder->load([
+            'lines', 'documents.uploader', 'logs.actor',
+            'approvals.decidedBy', 'approvals.queries.asker', 'approvals.queries.target',
+        ]);
 
         $checklist = $this->checklist->statusFor($purchaseOrder, 'evaluation_pack');
+        $user = Auth::user();
+
+        // Which approvals can the current user act on right now (their turn, their role)?
+        $actionable = [];
+        $targetsByApproval = [];
+        foreach ($purchaseOrder->approvals->groupBy('stage') as $stageApprovals) {
+            $earlierPending = false;
+            foreach ($stageApprovals->sortBy('step_order') as $approval) {
+                $isPending = $approval->decision === \App\Enums\ApprovalDecision::Pending;
+
+                $actionable[$approval->id] = $isPending
+                    && ! $earlierPending
+                    && ($user->role->isAdmin() || $user->role === $approval->role)
+                    && ! $approval->hasOpenQuery();
+
+                if ($actionable[$approval->id]) {
+                    $chainRoles = $stageApprovals->pluck('role')->unique();
+                    $targetsByApproval[$approval->id] = User::all()
+                        ->filter(fn ($u) => $chainRoles->contains($u->role) && $u->id !== $user->id)
+                        ->values();
+                }
+
+                if ($isPending) {
+                    $earlierPending = true;
+                }
+            }
+        }
 
         return view('requisitions.show', [
             'po' => $purchaseOrder,
             'checklist' => $checklist,
+            'actionable' => $actionable,
+            'targetsByApproval' => $targetsByApproval,
         ]);
     }
 
