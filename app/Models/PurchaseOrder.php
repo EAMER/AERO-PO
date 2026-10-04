@@ -20,6 +20,8 @@ class PurchaseOrder extends Model
     protected $fillable = [
         'tenant_id', 'reference', 'requested_by', 'is_amo_request',
         'payment_terms', 'total_weight_kg', 'contains_dg',
+        'awb_number', 'customs_duty_paid', 'grn_number',
+        'serviceable_label_applied_at', 'cardex_sent_at', 'digimaint_synced_at',
     ];
 
     protected $casts = [
@@ -27,6 +29,10 @@ class PurchaseOrder extends Model
         'is_amo_request' => 'boolean',
         'contains_dg' => 'boolean',
         'total_weight_kg' => 'decimal:2',
+        'customs_duty_paid' => 'boolean',
+        'serviceable_label_applied_at' => 'datetime',
+        'cardex_sent_at' => 'datetime',
+        'digimaint_synced_at' => 'datetime',
     ];
 
     protected $attributes = ['status' => 'requisition_raised'];

@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Contracts\StockChecker;
 use App\Enums\Role;
 use App\Models\PurchaseOrder;
+use App\Models\User;
 use App\Services\DocumentChecklistService;
 use App\Services\RequisitionService;
 use Illuminate\Http\Request;
@@ -65,6 +66,9 @@ class RequisitionController extends Controller
         ]);
 
         $checklist = $this->checklist->statusFor($purchaseOrder, 'evaluation_pack');
+        $shippingChecklist = $purchaseOrder->total_weight_kg
+            ? $this->checklist->statusFor($purchaseOrder, ($purchaseOrder->contains_dg || (float) $purchaseOrder->total_weight_kg > 50) ? 'shipping_heavy' : 'shipping_light')
+            : [];
         $user = Auth::user();
 
         // Which approvals can the current user act on right now (their turn, their role)?
@@ -96,6 +100,7 @@ class RequisitionController extends Controller
         return view('requisitions.show', [
             'po' => $purchaseOrder,
             'checklist' => $checklist,
+            'shippingChecklist' => $shippingChecklist,
             'actionable' => $actionable,
             'targetsByApproval' => $targetsByApproval,
         ]);
@@ -139,6 +144,73 @@ class RequisitionController extends Controller
         }
 
         return back()->with('status', 'Submitted for approval.');
+    }
+
+    public function setPaymentTerms(PurchaseOrder $purchaseOrder, Request $request)
+    {
+        $this->authorizeRole([Role::LogisticsOfficer]);
+
+        $data = $request->validate(['payment_terms' => 'required|in:net,cia']);
+
+        try {
+            $this->requisitions->setPaymentTerms($purchaseOrder, Auth::user(), $data['payment_terms']);
+        } catch (\InvalidArgumentException $e) {
+            return back()->withErrors(['payment_terms' => $e->getMessage()]);
+        }
+
+        return back()->with('status', 'Payment terms set.');
+    }
+
+    public function markAcknowledged(PurchaseOrder $purchaseOrder)
+    {
+        $this->authorizeRole([Role::LogisticsOfficer]);
+
+        try {
+            $this->requisitions->markAcknowledged($purchaseOrder, Auth::user());
+        } catch (\RuntimeException $e) {
+            return back()->withErrors(['checklist' => $e->getMessage()]);
+        }
+
+        return back()->with('status', 'Marked as acknowledged.');
+    }
+
+    public function proceedToPayment(PurchaseOrder $purchaseOrder)
+    {
+        $this->authorizeRole([Role::LogisticsOfficer]);
+
+        try {
+            $this->requisitions->proceedToPayment($purchaseOrder, Auth::user());
+        } catch (\RuntimeException $e) {
+            return back()->withErrors(['payment' => $e->getMessage()]);
+        }
+
+        return back()->with('status', 'Moved to awaiting payment.');
+    }
+
+    public function confirmPayment(PurchaseOrder $purchaseOrder)
+    {
+        $this->authorizeRole([Role::LogisticsOfficer, Role::Treasury, Role::Payables]);
+
+        try {
+            $this->requisitions->confirmPayment($purchaseOrder, Auth::user());
+        } catch (\RuntimeException $e) {
+            return back()->withErrors(['checklist' => $e->getMessage()]);
+        }
+
+        return back()->with('status', 'Payment confirmed. Ready to ship.');
+    }
+
+    public function markReadyToShipOnNetTerms(PurchaseOrder $purchaseOrder)
+    {
+        $this->authorizeRole([Role::LogisticsOfficer]);
+
+        try {
+            $this->requisitions->markReadyToShipOnNetTerms($purchaseOrder, Auth::user());
+        } catch (\RuntimeException $e) {
+            return back()->withErrors(['payment' => $e->getMessage()]);
+        }
+
+        return back()->with('status', 'Ready to ship.');
     }
 
     /** @param list<Role> $roles */

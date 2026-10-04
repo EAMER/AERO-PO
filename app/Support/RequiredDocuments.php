@@ -32,6 +32,16 @@ class RequiredDocuments
                 D::ProformaInvoice->value => 1,
                 D::TelexCopy->value => 1,
             ],
+            // 7.1.9-7.1.10: under 50kg, non-DG -> courier (DHL/FedEx).
+            'shipping_light' => [
+                D::CustomsDutyReceipt->value => 1,
+                D::AirwayBill->value => 1,
+            ],
+            // 7.1.11-7.1.12: 50kg+ or dangerous goods -> freight forwarder.
+            'shipping_heavy' => [
+                D::CommercialInvoice->value => 1,
+                D::AirwayBill->value => 1,
+            ],
             default => [],
         };
     }

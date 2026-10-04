@@ -67,6 +67,233 @@
                 </div>
             </div>
 
+            {{-- Acknowledgement & payment --}}
+            @if (in_array($po->status->value, ['po_sent', 'acknowledged', 'awaiting_payment']))
+                <div class="bg-white shadow-sm sm:rounded-lg p-6">
+                    <h3 class="text-sm font-semibold text-gray-700 mb-3">Acknowledgement & payment</h3>
+
+                    <div class="mb-4">
+                        <span class="text-sm text-gray-600">Payment terms:</span>
+                        @if ($po->payment_terms)
+                            <span class="font-medium text-sm">{{ strtoupper($po->payment_terms) }}</span>
+                        @else
+                            <form method="POST" action="{{ route('requisitions.payment-terms', $po) }}" class="inline-flex gap-2 ml-2">
+                                @csrf
+                                <select name="payment_terms" required class="rounded-md border-gray-300 text-xs shadow-sm">
+                                    <option value="">Select...</option>
+                                    <option value="net">Net terms</option>
+                                    <option value="cia">Cash in advance</option>
+                                </select>
+                                <button class="px-2 py-1 bg-gray-800 text-white text-xs rounded-md hover:bg-gray-700">Set</button>
+                            </form>
+                        @endif
+                    </div>
+
+                    @if ($po->status->value === 'po_sent')
+                        <p class="text-xs text-gray-500 mb-2">Upload the vendor's acknowledged PO copy below, then mark it acknowledged.</p>
+                        <form method="POST" action="{{ route('documents.store', $po) }}" enctype="multipart/form-data" class="flex flex-wrap items-end gap-2 mb-3">
+                            @csrf
+                            <input type="hidden" name="type" value="acknowledged_po">
+                            <input type="file" name="file" required class="text-sm">
+                            <button class="px-3 py-2 bg-gray-800 text-white text-xs font-semibold rounded-md hover:bg-gray-700">Upload acknowledged PO</button>
+                        </form>
+                        <form method="POST" action="{{ route('requisitions.acknowledge', $po) }}">
+                            @csrf
+                            <button class="px-3 py-2 bg-indigo-600 text-white text-xs font-semibold rounded-md hover:bg-indigo-500">
+                                Mark as acknowledged
+                            </button>
+                        </form>
+                    @endif
+
+                    @if ($po->status->value === 'acknowledged' && $po->payment_terms === 'cia')
+                        <form method="POST" action="{{ route('requisitions.proceed-to-payment', $po) }}">
+                            @csrf
+                            <button class="px-3 py-2 bg-indigo-600 text-white text-xs font-semibold rounded-md hover:bg-indigo-500">
+                                Proceed to payment (cash in advance)
+                            </button>
+                        </form>
+                    @endif
+
+                    @if ($po->status->value === 'acknowledged' && $po->payment_terms === 'net')
+                        <form method="POST" action="{{ route('requisitions.ready-to-ship', $po) }}">
+                            @csrf
+                            <button class="px-3 py-2 bg-green-600 text-white text-xs font-semibold rounded-md hover:bg-green-500">
+                                Ready to ship (net terms - no upfront payment)
+                            </button>
+                        </form>
+                    @endif
+
+                    @if ($po->status->value === 'awaiting_payment')
+                        <p class="text-xs text-gray-500 mb-2">Upload the proforma invoice and the telex payment copy, then confirm payment.</p>
+                        <div class="space-y-2 mb-3">
+                            @foreach (['proforma_invoice' => 'Proforma invoice', 'telex_copy' => 'Telex copy'] as $docType => $label)
+                                <form method="POST" action="{{ route('documents.store', $po) }}" enctype="multipart/form-data" class="flex flex-wrap items-end gap-2">
+                                    @csrf
+                                    <input type="hidden" name="type" value="{{ $docType }}">
+                                    <span class="text-xs w-32">{{ $label }}</span>
+                                    <input type="file" name="file" required class="text-sm">
+                                    <button class="px-3 py-2 bg-gray-800 text-white text-xs font-semibold rounded-md hover:bg-gray-700">Upload</button>
+                                </form>
+                            @endforeach
+                        </div>
+                        <form method="POST" action="{{ route('requisitions.confirm-payment', $po) }}">
+                            @csrf
+                            <button class="px-3 py-2 bg-green-600 text-white text-xs font-semibold rounded-md hover:bg-green-500">
+                                Confirm payment received
+                            </button>
+                        </form>
+                    @endif
+                </div>
+            @endif
+
+            {{-- Fulfilled directly from stock: just close it out --}}
+            @if ($po->status->value === 'fulfilled_from_stock')
+                <div class="bg-white shadow-sm sm:rounded-lg p-6">
+                    <h3 class="text-sm font-semibold text-gray-700 mb-3">Fulfilled from stock</h3>
+                    <p class="text-xs text-gray-500 mb-3">All lines were available in DigiMaint. No shipping needed - close this out to hand it back.</p>
+                    <form method="POST" action="{{ route('shipping.close-from-stock', $po) }}">
+                        @csrf
+                        <button class="px-3 py-2 bg-green-600 text-white text-xs font-semibold rounded-md hover:bg-green-500">
+                            Close (hand back to DigiMaint)
+                        </button>
+                    </form>
+                </div>
+            @endif
+
+            {{-- Shipping & receiving --}}
+            @if (in_array($po->status->value, ['ready_to_ship', 'in_transit', 'delivered', 'received', 'grn_issued']))
+                @php
+                    $heavyOrDg = $po->contains_dg || (float) ($po->total_weight_kg ?? 0) > 50;
+                @endphp
+                <div class="bg-white shadow-sm sm:rounded-lg p-6">
+                    <h3 class="text-sm font-semibold text-gray-700 mb-3">Shipping & receiving</h3>
+
+                    @if ($po->status->value === 'ready_to_ship')
+                        <div class="mb-4">
+                            <span class="text-sm text-gray-600">Shipment:</span>
+                            @if ($po->total_weight_kg)
+                                <span class="text-sm">{{ $po->total_weight_kg }} kg, {{ $po->contains_dg ? 'contains DG' : 'non-DG' }}
+                                    — route: <span class="font-medium">{{ $heavyOrDg ? 'Freight forwarder' : 'Courier' }}</span></span>
+                            @else
+                                <form method="POST" action="{{ route('shipping.record-details', $po) }}" class="inline-flex flex-wrap items-end gap-2">
+                                    @csrf
+                                    <input type="number" step="0.01" min="0.01" name="total_weight_kg" required placeholder="Weight (kg)"
+                                           class="w-32 rounded-md border-gray-300 text-xs shadow-sm">
+                                    <label class="inline-flex items-center text-xs">
+                                        <input type="checkbox" name="contains_dg" value="1" class="rounded border-gray-300 mr-1"> Contains DG
+                                    </label>
+                                    <button class="px-2 py-1 bg-gray-800 text-white text-xs rounded-md hover:bg-gray-700">Set</button>
+                                </form>
+                            @endif
+                        </div>
+
+                        @if ($po->total_weight_kg)
+                            @unless ($heavyOrDg)
+                                <div class="mb-3">
+                                    @if ($po->customs_duty_paid)
+                                        <span class="text-xs text-green-600">✓ Customs duty paid</span>
+                                    @else
+                                        <form method="POST" action="{{ route('shipping.customs-duty-paid', $po) }}">
+                                            @csrf
+                                            <button class="px-2 py-1 bg-gray-800 text-white text-xs rounded-md hover:bg-gray-700">Mark customs duty paid</button>
+                                        </form>
+                                    @endif
+                                </div>
+                            @endunless
+
+                            <p class="text-xs text-gray-500 mb-1">
+                                Required documents ({{ $heavyOrDg ? 'freight forwarder' : 'courier' }} route):
+                            </p>
+                            <ul class="mb-2 space-y-1 text-xs">
+                                @foreach ($shippingChecklist as $row)
+                                    <li class="flex items-center gap-2">
+                                        <span class="{{ $row['met'] ? 'text-green-600' : 'text-red-500' }}">{{ $row['met'] ? '✓' : '✗' }}</span>
+                                        {{ ucwords(str_replace('_', ' ', $row['type'])) }}
+                                        <span class="text-gray-400">({{ $row['have'] }}/{{ $row['required'] }})</span>
+                                    </li>
+                                @endforeach
+                            </ul>
+                            <form method="POST" action="{{ route('documents.store', $po) }}" enctype="multipart/form-data" class="flex flex-wrap items-end gap-2 mb-3">
+                                @csrf
+                                <select name="type" class="rounded-md border-gray-300 text-xs shadow-sm">
+                                    @foreach (\App\Enums\DocumentType::cases() as $type)
+                                        <option value="{{ $type->value }}">{{ $type->label() }}</option>
+                                    @endforeach
+                                </select>
+                                <input type="file" name="file" required class="text-sm">
+                                <button class="px-2 py-1 bg-gray-800 text-white text-xs rounded-md hover:bg-gray-700">Upload</button>
+                            </form>
+
+                            <form method="POST" action="{{ route('shipping.dispatch', $po) }}" class="flex flex-wrap items-end gap-2">
+                                @csrf
+                                <input type="text" name="awb_number" required placeholder="AWB number"
+                                       class="rounded-md border-gray-300 text-xs shadow-sm">
+                                <button class="px-3 py-2 bg-indigo-600 text-white text-xs font-semibold rounded-md hover:bg-indigo-500">
+                                    Dispatch
+                                </button>
+                            </form>
+                        @endif
+                    @endif
+
+                    @if ($po->status->value === 'in_transit')
+                        <p class="text-xs text-gray-500 mb-2">AWB: {{ $po->awb_number }}</p>
+                        <form method="POST" action="{{ route('shipping.mark-delivered', $po) }}">
+                            @csrf
+                            <button class="px-3 py-2 bg-indigo-600 text-white text-xs font-semibold rounded-md hover:bg-indigo-500">Mark delivered</button>
+                        </form>
+                    @endif
+
+                    @if ($po->status->value === 'delivered')
+                        <form method="POST" action="{{ route('shipping.confirm-receipt', $po) }}">
+                            @csrf
+                            <button class="px-3 py-2 bg-indigo-600 text-white text-xs font-semibold rounded-md hover:bg-indigo-500">Confirm receipt (stores)</button>
+                        </form>
+                    @endif
+
+                    @if ($po->status->value === 'received')
+                        <form method="POST" action="{{ route('shipping.issue-grn', $po) }}" class="flex flex-wrap items-end gap-2">
+                            @csrf
+                            <input type="text" name="grn_number" required placeholder="GRN number"
+                                   class="rounded-md border-gray-300 text-xs shadow-sm">
+                            <button class="px-3 py-2 bg-indigo-600 text-white text-xs font-semibold rounded-md hover:bg-indigo-500">Issue GRN</button>
+                        </form>
+                    @endif
+
+                    @if ($po->status->value === 'grn_issued')
+                        <div class="space-y-2">
+                            <p class="text-xs text-gray-500">GRN: {{ $po->grn_number }}</p>
+
+                            @if ($po->serviceable_label_applied_at)
+                                <p class="text-xs text-green-600">✓ Serviceable label applied</p>
+                            @else
+                                <form method="POST" action="{{ route('shipping.serviceable-label', $po) }}">
+                                    @csrf
+                                    <button class="px-2 py-1 bg-gray-800 text-white text-xs rounded-md hover:bg-gray-700">Mark serviceable label applied</button>
+                                </form>
+                            @endif
+
+                            @if ($po->cardex_sent_at)
+                                <p class="text-xs text-green-600">✓ Cardex sent</p>
+                            @else
+                                <form method="POST" action="{{ route('shipping.cardex-sent', $po) }}">
+                                    @csrf
+                                    <button class="px-2 py-1 bg-gray-800 text-white text-xs rounded-md hover:bg-gray-700">Mark Cardex sent</button>
+                                </form>
+                            @endif
+
+                            @if ($po->serviceable_label_applied_at && $po->cardex_sent_at)
+                                <form method="POST" action="{{ route('shipping.close', $po) }}" class="pt-2">
+                                    @csrf
+                                    <button class="px-3 py-2 bg-green-600 text-white text-xs font-semibold rounded-md hover:bg-green-500">
+                                        Close (hand back to DigiMaint)
+                                    </button>
+                                </form>
+                            @endif
+                        </div>
+                    @endif
+                </div>
+            @endif
+
             {{-- Part lines --}}
             <div class="bg-white shadow-sm sm:rounded-lg p-6">
                 <h3 class="text-sm font-semibold text-gray-700 mb-3">Part lines</h3>
