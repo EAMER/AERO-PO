@@ -7,12 +7,12 @@ use App\Enums\Role;
 use App\Models\Tenant;
 use App\Models\User;
 use App\Services\RequisitionService;
-use App\Support\FakeStockChecker;
 use App\Support\TenantContext;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use InvalidArgumentException;
 use Tests\TestCase;
 
+/** 7.1.1: the stock check is manual - Stores looks each part up in DigiMaint and tells the app the result. */
 class RequisitionAndStockCheckTest extends TestCase
 {
     use RefreshDatabase;
@@ -56,39 +56,56 @@ class RequisitionAndStockCheckTest extends TestCase
         $this->assertSame('new', $po->lines()->where('part_number', 'XYZ-999')->first()->condition);
     }
 
-    public function test_all_lines_in_stock_closes_the_po_via_fulfilled_from_stock(): void
+    public function test_all_lines_marked_available_closes_the_po_via_fulfilled_from_stock(): void
     {
         $po = $this->requisitions->raise('PO-1', $this->user(Role::Requester), [
-            ['part_number' => 'INSTOCK-1', 'description' => 'Bracket', 'quantity' => 1],
-            ['part_number' => 'INSTOCK-2', 'description' => 'Gasket', 'quantity' => 1],
+            ['part_number' => 'ABC-123', 'description' => 'Bracket', 'quantity' => 1],
+            ['part_number' => 'XYZ-999', 'description' => 'Gasket', 'quantity' => 1],
         ]);
 
-        $po = $this->requisitions->checkStock($po, $this->user(Role::StoreStaff), new FakeStockChecker());
+        $availability = $po->lines->mapWithKeys(fn ($l) => [$l->id => true])->all();
+        $po = $this->requisitions->checkStock($po, $this->user(Role::StoreStaff), $availability);
 
         $this->assertSame(S::FulfilledFromStock, $po->status);
         $this->assertTrue($po->lines->every(fn ($l) => $l->stock_available === true));
     }
 
-    public function test_any_line_short_leaves_the_po_at_stock_checked(): void
+    public function test_any_line_marked_short_leaves_the_po_at_stock_checked(): void
     {
         $po = $this->requisitions->raise('PO-1', $this->user(Role::Requester), [
-            ['part_number' => 'INSTOCK-1', 'description' => 'Bracket', 'quantity' => 1],
-            ['part_number' => 'SHORT-1', 'description' => 'Gasket', 'quantity' => 1],
+            ['part_number' => 'ABC-123', 'description' => 'Bracket', 'quantity' => 1],
+            ['part_number' => 'XYZ-999', 'description' => 'Gasket', 'quantity' => 1],
         ]);
 
-        $po = $this->requisitions->checkStock($po, $this->user(Role::StoreStaff), new FakeStockChecker());
+        $lines = $po->lines;
+        $availability = [$lines[0]->id => true, $lines[1]->id => false];
+        $po = $this->requisitions->checkStock($po, $this->user(Role::StoreStaff), $availability);
 
         $this->assertSame(S::StockChecked, $po->status);
+    }
+
+    public function test_a_missing_line_result_is_rejected(): void
+    {
+        $po = $this->requisitions->raise('PO-1', $this->user(Role::Requester), [
+            ['part_number' => 'ABC-123', 'description' => 'Bracket', 'quantity' => 1],
+            ['part_number' => 'XYZ-999', 'description' => 'Gasket', 'quantity' => 1],
+        ]);
+
+        $onlyOneLine = [$po->lines->first()->id => true];
+
+        $this->expectException(InvalidArgumentException::class);
+
+        $this->requisitions->checkStock($po, $this->user(Role::StoreStaff), $onlyOneLine);
     }
 
     public function test_the_short_flow_reaches_quotes_in(): void
     {
         $po = $this->requisitions->raise('PO-1', $this->user(Role::Requester), [
-            ['part_number' => 'SHORT-1', 'description' => 'Gasket', 'quantity' => 1],
+            ['part_number' => 'XYZ-999', 'description' => 'Gasket', 'quantity' => 1],
         ]);
         $logistics = $this->user(Role::LogisticsOfficer);
 
-        $po = $this->requisitions->checkStock($po, $this->user(Role::StoreStaff), new FakeStockChecker());
+        $po = $this->requisitions->checkStock($po, $this->user(Role::StoreStaff), [$po->lines->first()->id => false]);
         $po = $this->requisitions->markRfqSent($po, $logistics);
         $po = $this->requisitions->markQuotesIn($po, $logistics);
 

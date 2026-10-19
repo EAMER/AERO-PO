@@ -6,6 +6,7 @@ use App\Enums\ApprovalDecision;
 use App\Enums\Role;
 use App\Events\ApprovalChainCompleted;
 use App\Events\ApprovalChainStopped;
+use App\Events\ApprovalStepOpened;
 use App\Events\ApprovalQueried;
 use App\Events\ApprovalQueryAnswered;
 use App\Models\Approval;
@@ -24,6 +25,46 @@ use InvalidArgumentException;
  */
 class ApprovalService
 {
+    /**
+     * Every pending approval step this user can act on right now: their
+     * role, no earlier step in the same chain still pending, and no open
+     * query blocking it. Admins see every pending step across the tenant.
+     */
+    public function actionableFor(User $user): \Illuminate\Support\Collection
+    {
+        $query = Approval::with(['approvable', 'queries'])->where('decision', ApprovalDecision::Pending);
+
+        if (! $user->role->isAdmin()) {
+            $query->where('role', $user->role);
+        }
+
+        $results = collect();
+
+        foreach ($query->get() as $approval) {
+            $earlierPending = Approval::where('approvable_type', $approval->approvable_type)
+                ->where('approvable_id', $approval->approvable_id)
+                ->where('stage', $approval->stage)
+                ->where('step_order', '<', $approval->step_order)
+                ->where('decision', ApprovalDecision::Pending)
+                ->exists();
+
+            if (! $earlierPending && ! $approval->hasOpenQuery()) {
+                $results->push($approval);
+            }
+        }
+
+        return $results;
+    }
+
+    /** Every open query directed at this user, across the tenant. */
+    public function openQueriesFor(User $user): \Illuminate\Support\Collection
+    {
+        return \App\Models\ApprovalQuery::whereNull('answered_at')
+            ->where('directed_to', $user->id)
+            ->with(['approval.approvable', 'asker'])
+            ->get();
+    }
+
     /** @param list<Role> $roles in approval order */
     public function request(Model $subject, array $roles, string $stage = 'evaluation'): void
     {
@@ -32,8 +73,10 @@ class ApprovalService
         }
 
         DB::transaction(function () use ($subject, $roles, $stage) {
+            $first = null;
+
             foreach (array_values($roles) as $i => $role) {
-                Approval::create([
+                $approval = Approval::create([
                     'approvable_type' => $subject->getMorphClass(),
                     'approvable_id' => $subject->getKey(),
                     'stage' => $stage,
@@ -41,6 +84,12 @@ class ApprovalService
                     'role' => $role,
                     'decision' => ApprovalDecision::Pending,
                 ]);
+
+                $first ??= $approval;
+            }
+
+            if ($first) {
+                ApprovalStepOpened::dispatch($first);
             }
         });
     }
@@ -156,6 +205,18 @@ class ApprovalService
 
             if (! $stillPending) {
                 ApprovalChainCompleted::dispatch($subject, $approval->stage, $actor);
+                return;
+            }
+
+            $next = Approval::where('approvable_type', $approval->approvable_type)
+                ->where('approvable_id', $approval->approvable_id)
+                ->where('stage', $approval->stage)
+                ->where('step_order', $approval->step_order + 1)
+                ->where('decision', ApprovalDecision::Pending)
+                ->first();
+
+            if ($next) {
+                ApprovalStepOpened::dispatch($next);
             }
         });
     }

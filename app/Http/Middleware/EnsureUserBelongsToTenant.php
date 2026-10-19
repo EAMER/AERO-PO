@@ -17,6 +17,11 @@ class EnsureUserBelongsToTenant
             abort(403, 'Account does not belong to this tenant.');
         }
 
+        if ($user && ! $user->is_active) {
+            auth()->logout();
+            abort(403, 'This account has been deactivated.');
+        }
+
         return $next($request);
     }
 }

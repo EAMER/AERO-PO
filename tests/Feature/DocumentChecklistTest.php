@@ -11,7 +11,6 @@ use App\Models\User;
 use App\Services\DocumentChecklistService;
 use App\Services\DocumentService;
 use App\Services\RequisitionService;
-use App\Support\FakeStockChecker;
 use App\Support\TenantContext;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
@@ -58,7 +57,7 @@ class DocumentChecklistTest extends TestCase
             ['part_number' => 'SHORT-1', 'description' => 'Gasket', 'quantity' => 1],
         ]);
         $logistics = $this->user(Role::LogisticsOfficer);
-        $po = $this->requisitions->checkStock($po, $this->user(Role::StoreStaff), new FakeStockChecker());
+        $po = $this->requisitions->checkStock($po, $this->user(Role::StoreStaff), [$po->lines->first()->id => false]);
         $po = $this->requisitions->markRfqSent($po, $logistics);
 
         return $this->requisitions->markQuotesIn($po, $logistics);
@@ -117,7 +116,7 @@ class DocumentChecklistTest extends TestCase
             ['part_number' => 'SHORT-1', 'description' => 'Gasket', 'quantity' => 1],
         ], isAmoRequest: true);
         $logistics = $this->user(Role::LogisticsOfficer);
-        $po = $this->requisitions->checkStock($po, $this->user(Role::StoreStaff), new FakeStockChecker());
+        $po = $this->requisitions->checkStock($po, $this->user(Role::StoreStaff), [$po->lines->first()->id => false]);
         $po = $this->requisitions->markRfqSent($po, $logistics);
         $po = $this->requisitions->markQuotesIn($po, $logistics);
         $this->uploadPack($po);

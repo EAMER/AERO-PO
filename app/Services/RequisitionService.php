@@ -2,7 +2,6 @@
 
 namespace App\Services;
 
-use App\Contracts\StockChecker;
 use App\Enums\PurchaseOrderStatus as S;
 use App\Enums\Role;
 use App\Events\StockCheckCompleted;
@@ -48,19 +47,29 @@ class RequisitionService
         });
     }
 
-    /** 7.1.1: check every line against DigiMaint (or its fake for now). */
-    public function checkStock(PurchaseOrder $po, User $actor, StockChecker $checker): PurchaseOrder
+    /**
+     * 7.1.1: record what Stores saw in DigiMaint, line by line. DigiMaint
+     * has no API integration yet, so this is a manual entry - someone
+     * checks DigiMaint themselves and tells the app the result per line.
+     *
+     * @param array<int, bool> $availability line id => available in DigiMaint
+     */
+    public function checkStock(PurchaseOrder $po, User $actor, array $availability): PurchaseOrder
     {
-        return DB::transaction(function () use ($po, $actor, $checker) {
+        return DB::transaction(function () use ($po, $actor, $availability) {
             /** @var PoLine $line */
             foreach ($po->lines as $line) {
+                if (! array_key_exists($line->id, $availability)) {
+                    throw new InvalidArgumentException("Missing a stock result for line {$line->part_number}.");
+                }
+
                 $line->update([
-                    'stock_available' => $checker->isAvailable($line),
+                    'stock_available' => (bool) $availability[$line->id],
                     'stock_checked_at' => now(),
                 ]);
             }
 
-            $po = $this->workflow->transition($po, S::StockChecked, $actor, 'Stock checked against DigiMaint');
+            $po = $this->workflow->transition($po, S::StockChecked, $actor, 'Stock checked against DigiMaint (manual)');
 
             $allAvailable = $po->lines->every(fn (PoLine $l) => $l->stock_available === true);
 

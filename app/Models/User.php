@@ -12,7 +12,7 @@ class User extends Authenticatable
 {
     use HasFactory, Notifiable, BelongsToTenant;
 
-    protected $fillable = ['tenant_id', 'name', 'email', 'password', 'role'];
+    protected $fillable = ['tenant_id', 'name', 'email', 'password', 'role', 'is_active'];
 
     protected $hidden = ['password', 'remember_token'];
 
@@ -22,6 +22,7 @@ class User extends Authenticatable
             'email_verified_at' => 'datetime',
             'password' => 'hashed',
             'role' => Role::class,
+            'is_active' => 'boolean',
         ];
     }
 

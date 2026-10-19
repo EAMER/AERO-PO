@@ -26,10 +26,23 @@
                 <h3 class="text-sm font-semibold text-gray-700 mb-3">Actions</h3>
                 <div class="flex flex-wrap gap-2">
                     @if ($po->status->value === 'requisition_raised')
-                        <form method="POST" action="{{ route('requisitions.check-stock', $po) }}">
+                        <form method="POST" action="{{ route('requisitions.check-stock', $po) }}" class="w-full">
                             @csrf
+                            <p class="text-xs text-gray-500 mb-2">
+                                Look each part up in DigiMaint and tick the ones that are in stock. No DigiMaint integration yet - this is a manual check.
+                            </p>
+                            <div class="space-y-1 mb-3">
+                                @foreach ($po->lines as $line)
+                                    <label class="flex items-center gap-2 text-sm">
+                                        <input type="checkbox" name="available[{{ $line->id }}]" value="1"
+                                               class="rounded border-gray-300">
+                                        <span class="font-medium">{{ $line->part_number }}</span>
+                                        <span class="text-gray-400">{{ $line->description }} (qty {{ $line->quantity }})</span>
+                                    </label>
+                                @endforeach
+                            </div>
                             <button class="px-3 py-2 bg-indigo-600 text-white text-xs font-semibold rounded-md hover:bg-indigo-500">
-                                Check stock (DigiMaint)
+                                Record DigiMaint check
                             </button>
                         </form>
                     @endif

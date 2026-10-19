@@ -2,7 +2,6 @@
 
 namespace App\Http\Controllers;
 
-use App\Contracts\StockChecker;
 use App\Enums\Role;
 use App\Models\PurchaseOrder;
 use App\Models\User;
@@ -106,13 +105,25 @@ class RequisitionController extends Controller
         ]);
     }
 
-    public function checkStock(PurchaseOrder $purchaseOrder, StockChecker $checker)
+    public function checkStock(PurchaseOrder $purchaseOrder, Request $request)
     {
         $this->authorizeRole([Role::StoreStaff, Role::StoreSupervisor]);
 
-        $this->requisitions->checkStock($purchaseOrder, Auth::user(), $checker);
+        // Checkboxes only submit when checked, so default every line to
+        // false, then override with whatever was actually ticked.
+        $checked = array_map(fn ($v) => (bool) $v, $request->input('available', []));
+        $availability = [];
+        foreach ($purchaseOrder->lines as $line) {
+            $availability[$line->id] = $checked[$line->id] ?? false;
+        }
 
-        return back()->with('status', 'Stock checked.');
+        try {
+            $this->requisitions->checkStock($purchaseOrder, Auth::user(), $availability);
+        } catch (\InvalidArgumentException $e) {
+            return back()->withErrors(['stock' => $e->getMessage()]);
+        }
+
+        return back()->with('status', 'Stock check recorded.');
     }
 
     public function markRfqSent(PurchaseOrder $purchaseOrder)

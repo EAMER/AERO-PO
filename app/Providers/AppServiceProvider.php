@@ -2,25 +2,24 @@
 
 namespace App\Providers;
 
-use Illuminate\Support\ServiceProvider;
+use App\Auth\TenantAwarePasswordBrokerManager;
 use App\Contracts\StockChecker;
 use App\Support\FakeStockChecker;
+use Illuminate\Support\ServiceProvider;
 
 class AppServiceProvider extends ServiceProvider
 {
-    /**
-     * Register any application services.
-     */
     public function register(): void
     {
-        //
+    
     }
 
-    /**
-     * Bootstrap any application services.
-     */
     public function boot(): void
     {
         $this->app->bind(StockChecker::class, FakeStockChecker::class);
+
+        $this->app->singleton('auth.password', function ($app) {
+            return new TenantAwarePasswordBrokerManager($app);
+        });
     }
 }

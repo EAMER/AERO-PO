@@ -3,8 +3,10 @@
 // Replace the whole of routes/web.php with this file.
 
 use App\Http\Controllers\ApprovalController;
+use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\DocumentController;
 use App\Http\Controllers\ShippingController;
+use App\Http\Controllers\UserManagementController;
 use App\Http\Controllers\ProfileController;
 use App\Http\Controllers\RequisitionController;
 use Illuminate\Support\Facades\Route;
@@ -15,7 +17,7 @@ Route::domain('{tenant}.'.config('tenancy.domain'))
         Route::get('/', fn () => redirect()->route('login'));
 
         Route::middleware(['auth', 'tenant.user'])->group(function () {
-            Route::get('/dashboard', fn () => redirect()->route('requisitions.index'))->name('dashboard');
+            Route::get('/dashboard', [DashboardController::class, 'index'])->name('dashboard');
 
             Route::get('/profile', [ProfileController::class, 'edit'])->name('profile.edit');
             Route::patch('/profile', [ProfileController::class, 'update'])->name('profile.update');
@@ -55,6 +57,13 @@ Route::domain('{tenant}.'.config('tenancy.domain'))
             Route::post('/requisitions/{purchaseOrder}/cardex-sent', [ShippingController::class, 'markCardexSent'])->name('shipping.cardex-sent');
             Route::post('/requisitions/{purchaseOrder}/close', [ShippingController::class, 'closeOut'])->name('shipping.close');
             Route::post('/requisitions/{purchaseOrder}/close-from-stock', [ShippingController::class, 'closeFulfilledFromStock'])->name('shipping.close-from-stock');
+
+            Route::get('/users', [UserManagementController::class, 'index'])->name('users.index');
+            Route::get('/users/create', [UserManagementController::class, 'create'])->name('users.create');
+            Route::post('/users', [UserManagementController::class, 'store'])->name('users.store');
+            Route::patch('/users/{user}/role', [UserManagementController::class, 'updateRole'])->name('users.update-role');
+            Route::patch('/users/{user}/active', [UserManagementController::class, 'setActive'])->name('users.set-active');
+            Route::post('/users/{user}/reset-password', [UserManagementController::class, 'resetPassword'])->name('users.reset-password');
         });
 
         require __DIR__.'/auth.php';
