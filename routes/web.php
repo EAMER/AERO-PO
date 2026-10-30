@@ -8,6 +8,7 @@ use App\Http\Controllers\DocumentController;
 use App\Http\Controllers\ShippingController;
 use App\Http\Controllers\UserManagementController;
 use App\Http\Controllers\ProfileController;
+use App\Http\Controllers\ReportController;
 use App\Http\Controllers\RequisitionController;
 use Illuminate\Support\Facades\Route;
 
@@ -57,6 +58,8 @@ Route::domain('{tenant}.'.config('tenancy.domain'))
             Route::post('/requisitions/{purchaseOrder}/cardex-sent', [ShippingController::class, 'markCardexSent'])->name('shipping.cardex-sent');
             Route::post('/requisitions/{purchaseOrder}/close', [ShippingController::class, 'closeOut'])->name('shipping.close');
             Route::post('/requisitions/{purchaseOrder}/close-from-stock', [ShippingController::class, 'closeFulfilledFromStock'])->name('shipping.close-from-stock');
+
+            Route::get('/reports', [ReportController::class, 'index'])->name('reports.index');
 
             Route::get('/users', [UserManagementController::class, 'index'])->name('users.index');
             Route::get('/users/create', [UserManagementController::class, 'create'])->name('users.create');
