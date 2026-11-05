@@ -12,6 +12,9 @@ enum PurchaseOrderStatus: string
     case PendingApproval = 'pending_approval';
     case Approved = 'approved';
     case PendingCfo = 'pending_cfo';
+    case PoApproved = 'po_approved';
+    case ReturnedEvaluation = 'returned_by_evaluation';
+    case ReturnedCfo = 'returned_by_cfo';
     case PoSent = 'po_sent';
     case Acknowledged = 'acknowledged';
     case AwaitingPayment = 'awaiting_payment';
@@ -30,12 +33,15 @@ enum PurchaseOrderStatus: string
         return match ($this) {
             self::RequisitionRaised => [self::StockChecked, self::Cancelled],
             self::StockChecked => [self::FulfilledFromStock, self::RfqSent, self::Cancelled],
-            self::FulfilledFromStock => [self::Closed],
+            self::FulfilledFromStock => [self::StockChecked, self::Closed],
             self::RfqSent => [self::QuotesIn, self::Cancelled],
             self::QuotesIn => [self::PendingApproval, self::Cancelled],
-            self::PendingApproval => [self::Approved, self::Rejected],
+            self::PendingApproval => [self::Approved, self::ReturnedEvaluation, self::Rejected],
             self::Approved => [self::PendingCfo],
-            self::PendingCfo => [self::PoSent, self::Rejected],
+            self::PendingCfo => [self::PoApproved, self::ReturnedCfo, self::Rejected],
+            self::PoApproved => [self::PoSent],
+            self::ReturnedEvaluation => [self::QuotesIn, self::Cancelled],
+            self::ReturnedCfo => [self::QuotesIn, self::Cancelled],
             self::PoSent => [self::Acknowledged],
             // net terms skip payment; cash-in-advance waits for payment
             self::Acknowledged => [self::AwaitingPayment, self::ReadyToShip],
@@ -68,10 +74,14 @@ enum PurchaseOrderStatus: string
             self::Received => [Role::StoreSupervisor, Role::StoreStaff],
             self::GrnIssued => [Role::StoreSupervisor, Role::StoreStaff, Role::LogisticsOfficer],
             self::RfqSent, self::QuotesIn, self::PendingApproval, self::Acknowledged,
-            self::AwaitingPayment, self::ReadyToShip, self::InTransit,
+            self::AwaitingPayment, self::InTransit,
             self::Delivered, self::Closed => [Role::LogisticsOfficer],
             self::Approved, self::PendingCfo => [Role::Tlm, Role::Hamo, Role::TechnicalDirector],
             self::PoSent => [Role::Cfo, Role::LogisticsOfficer],
+            self::PoApproved => [Role::Cfo],
+            self::ReadyToShip => [Role::LogisticsOfficer, Role::Treasury],
+            self::ReturnedEvaluation => [Role::Tlm, Role::Hamo, Role::TechnicalDirector],
+            self::ReturnedCfo => [Role::Cfo],
             self::Rejected => [Role::Tlm, Role::Hamo, Role::TechnicalDirector, Role::Cfo],
             self::Cancelled => [Role::Requester, Role::LogisticsOfficer],
         };

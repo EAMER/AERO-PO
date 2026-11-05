@@ -1,81 +1,46 @@
 <x-app-layout>
-    <x-slot name="header">
-        <h2 class="font-semibold text-xl text-gray-800 leading-tight">Raise a requisition</h2>
-    </x-slot>
-
-    <div class="py-8">
-        <div class="max-w-3xl mx-auto sm:px-6 lg:px-8">
-            <div class="bg-white shadow-sm sm:rounded-lg p-6">
-
-                @if ($errors->any())
-                    <div class="mb-4 rounded-md bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-800">
-                        <ul class="list-disc list-inside">
-                            @foreach ($errors->all() as $error)
-                                <li>{{ $error }}</li>
-                            @endforeach
-                        </ul>
-                    </div>
-                @endif
-
-                <form method="POST" action="{{ route('requisitions.store') }}" x-data="requisitionForm()">
-                    @csrf
-
-                    <div class="mb-4">
-                        <label class="block text-sm font-medium text-gray-700">Reference</label>
-                        <input type="text" name="reference" value="{{ old('reference') }}" required
-                               class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm"
-                               placeholder="e.g. REQ-2026-0142">
-                    </div>
-
-                    <div class="mb-6">
-                        <label class="inline-flex items-center">
-                            <input type="checkbox" name="is_amo_request" value="1" @checked(old('is_amo_request'))
-                                   class="rounded border-gray-300 text-indigo-600 shadow-sm focus:ring-indigo-500">
-                            <span class="ml-2 text-sm text-gray-700">This is an AMO purchase request (adds a HAMO approval step)</span>
-                        </label>
-                    </div>
-
-                    <div class="mb-2 flex items-center justify-between">
-                        <label class="block text-sm font-medium text-gray-700">Part lines</label>
-                        <button type="button" @click="addLine()" class="text-sm text-indigo-600 hover:underline">+ Add line</button>
-                    </div>
-
-                    <template x-for="(line, i) in lines" :key="i">
-                        <div class="grid grid-cols-12 gap-2 mb-2 items-start">
-                            <input type="text" :name="`lines[${i}][part_number]`" x-model="line.part_number"
-                                   placeholder="Part number" required
-                                   class="col-span-3 rounded-md border-gray-300 shadow-sm text-sm">
-                            <input type="text" :name="`lines[${i}][description]`" x-model="line.description"
-                                   placeholder="Description" required
-                                   class="col-span-4 rounded-md border-gray-300 shadow-sm text-sm">
-                            <input type="number" min="1" :name="`lines[${i}][quantity]`" x-model="line.quantity"
-                                   placeholder="Qty" required
-                                   class="col-span-2 rounded-md border-gray-300 shadow-sm text-sm">
-                            <input type="text" :name="`lines[${i}][condition]`" x-model="line.condition"
-                                   placeholder="Condition (optional)"
-                                   class="col-span-2 rounded-md border-gray-300 shadow-sm text-sm">
-                            <button type="button" @click="removeLine(i)" x-show="lines.length > 1"
-                                    class="col-span-1 text-red-500 hover:text-red-700 text-sm">&times;</button>
-                        </div>
-                    </template>
-
-                    <div class="mt-6 flex justify-end">
-                        <button type="submit"
-                                class="inline-flex items-center px-4 py-2 bg-gray-800 border border-transparent rounded-md font-semibold text-xs text-white uppercase tracking-widest hover:bg-gray-700">
-                            Raise requisition
-                        </button>
-                    </div>
-                </form>
+    <x-slot name="header"><div class="flex items-center justify-between gap-4"><h2>Raise a requisition</h2><a href="{{ route('requisitions.index') }}" class="btn-secondary">All requisitions</a></div></x-slot>
+    <p class="list-intro">Tell Stores what you need. Your request starts with a verified DigiMaint stock check.</p>
+    <section class="panel">
+        <form method="POST" action="{{ route('requisitions.store') }}" class="request-form" x-data="requisitionForm(@js(old('lines', [['part_number' => '', 'description' => '', 'quantity' => 1, 'condition' => '']])))">
+            @csrf
+            @if($errors->any())<div role="alert" class="mb-6 rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-800"><ul class="list-disc list-inside">@foreach($errors->all() as $error)<li>{{ $error }}</li>@endforeach</ul></div>@endif
+            <div class="form-section-title"><h3>01 <span class="ml-2">Request details</span></h3><p>A clear reference makes the requirement easy to follow through every stage.</p></div>
+            <div class="grid gap-6 md:grid-cols-2 mb-8">
+                <label for="reference">Requisition reference <span class="text-red-600">*</span><input id="reference" class="field" type="text" name="reference" value="{{ old('reference') }}" required maxlength="100" placeholder="e.g. REQ-2026-0142"><span class="block mt-2 text-xs text-gray-400 font-normal">Use your company's unique request reference.</span></label>
+                <div class="rounded-lg border border-gray-200 bg-gray-50 p-4"><label for="is_amo_request" class="flex items-start gap-3"><input id="is_amo_request" type="checkbox" name="is_amo_request" value="1" class="brand-checkbox mt-1" @checked(old('is_amo_request'))><span>AMO purchase request<span class="block mt-1 text-xs text-gray-500 font-normal">Includes HAMO in the evaluation approval chain.</span></span></label></div>
             </div>
-        </div>
-    </div>
-
+            <div class="form-section-title flex items-center justify-between gap-4"><div><h3>02 <span class="ml-2">Required parts</span></h3><p>Add the part number, description and quantity for each line.</p></div><button type="button" @click="addLine()" :disabled="lines.length >= 100" class="btn-secondary"><x-icon name="plus" /> Add line</button></div>
+            <template x-for="(line, i) in lines" :key="line._key">
+                <div class="part-line">
+                    <div class="part-line-header"><span>PART LINE <span x-text="String(i + 1).padStart(2, '0')"></span></span><button type="button" @click="removeLine(i)" x-show="lines.length > 1" :aria-label="'Remove part line ' + (i + 1)" class="text-red-700 p-1"><x-icon name="close" class="h-4 w-4" /></button></div>
+                    <div class="part-line-fields">
+                        <label :for="'part-' + line._key">Part number <span class="text-red-600">*</span><input :id="'part-' + line._key" :name="'lines[' + i + '][part_number]'" class="field" x-model="line.part_number" type="text" maxlength="100" placeholder="Part number" required></label>
+                        <label :for="'description-' + line._key">Description <span class="text-red-600">*</span><input :id="'description-' + line._key" :name="'lines[' + i + '][description]'" class="field" x-model="line.description" type="text" maxlength="255" placeholder="What is the part?" required></label>
+                        <label :for="'quantity-' + line._key">Quantity <span class="text-red-600">*</span><input :id="'quantity-' + line._key" :name="'lines[' + i + '][quantity]'" class="field" x-model="line.quantity" type="number" min="1" max="1000000" required></label>
+                        <label :for="'condition-' + line._key">Condition<input :id="'condition-' + line._key" :name="'lines[' + i + '][condition]'" class="field" x-model="line.condition" type="text" maxlength="50" placeholder="e.g. New"></label>
+                    </div>
+                </div>
+            </template>
+            <p class="mt-4 text-xs text-gray-500"><span x-text="lines.length"></span> of 100 part lines. Stock availability will be confirmed by Stores.</p>
+            <div class="form-actions"><a href="{{ route('requisitions.index') }}" class="btn-secondary">Cancel</a><x-primary-button>Raise requisition <x-icon name="arrow" /></x-primary-button></div>
+        </form>
+    </section>
     <script>
-        function requisitionForm() {
+        function requisitionForm(initialLines) {
             return {
-                lines: [{ part_number: '', description: '', quantity: 1, condition: '' }],
-                addLine() { this.lines.push({ part_number: '', description: '', quantity: 1, condition: '' }); },
-                removeLine(i) { this.lines.splice(i, 1); },
+                lines: initialLines.map((line, index) => ({ ...line, _key: index })),
+                nextKey: initialLines.length,
+                addLine() {
+                    if (this.lines.length < 100) {
+                        this.lines.push({ _key: this.nextKey++, part_number: '', description: '', quantity: 1, condition: '' });
+                    }
+                },
+                removeLine(index) {
+                    if (this.lines.length > 1) {
+                        this.lines.splice(index, 1);
+                    }
+                },
             };
         }
     </script>

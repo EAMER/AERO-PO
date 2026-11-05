@@ -7,6 +7,7 @@ use App\Events\PurchaseOrderTransitioned;
 use App\Models\PoStatusLog;
 use App\Models\PurchaseOrder;
 use App\Models\User;
+use App\Support\ProcurementAccess;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Support\Facades\DB;
 use InvalidArgumentException;
@@ -23,6 +24,9 @@ class WorkflowService
         User $actor,
         ?string $note = null,
     ): PurchaseOrder {
+        ProcurementAccess::tenant($po);
+        ProcurementAccess::roles($actor, ...$to->enteredBy());
+
         return DB::transaction(function () use ($po, $to, $actor, $note) {
             // Re-read under lock so two people can't move the same PO at once.
             $po = PurchaseOrder::whereKey($po->getKey())->lockForUpdate()->firstOrFail();

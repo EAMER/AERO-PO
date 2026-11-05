@@ -25,6 +25,9 @@ enum DocumentType: string
     case CommercialInvoice = 'commercial_invoice';
     case CustomsDutyReceipt = 'customs_duty_receipt';
     case AirwayBill = 'airway_bill';
+    case FreightQuotation = 'freight_quotation';
+    case DeliveryNote = 'delivery_note';
+    case DigimaintEvidence = 'digimaint_evidence';
 
     public function label(): string
     {

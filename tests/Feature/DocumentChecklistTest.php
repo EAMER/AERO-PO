@@ -5,17 +5,16 @@ namespace Tests\Feature;
 use App\Enums\DocumentType as D;
 use App\Enums\PurchaseOrderStatus as S;
 use App\Enums\Role;
-use App\Models\Approval;
 use App\Models\Tenant;
 use App\Models\User;
 use App\Services\DocumentChecklistService;
 use App\Services\DocumentService;
 use App\Services\RequisitionService;
 use App\Support\TenantContext;
+use DomainException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Storage;
-use RuntimeException;
 use Tests\TestCase;
 
 class DocumentChecklistTest extends TestCase
@@ -23,7 +22,9 @@ class DocumentChecklistTest extends TestCase
     use RefreshDatabase;
 
     private RequisitionService $requisitions;
+
     private DocumentService $documents;
+
     private DocumentChecklistService $checklist;
 
     protected function setUp(): void
@@ -57,10 +58,9 @@ class DocumentChecklistTest extends TestCase
             ['part_number' => 'SHORT-1', 'description' => 'Gasket', 'quantity' => 1],
         ]);
         $logistics = $this->user(Role::LogisticsOfficer);
-        $po = $this->requisitions->checkStock($po, $this->user(Role::StoreStaff), [$po->lines->first()->id => false]);
-        $po = $this->requisitions->markRfqSent($po, $logistics);
+        $po->forceFill(['status' => S::QuotesIn])->save();
 
-        return $this->requisitions->markQuotesIn($po, $logistics);
+        return $po->fresh();
     }
 
     private function uploadPack($po, int $quotations = 3): void
@@ -71,9 +71,13 @@ class DocumentChecklistTest extends TestCase
         $this->documents->upload($po, D::EvaluationSheet, UploadedFile::fake()->create('eval.pdf', 10), $logistics);
         $this->documents->upload($po, D::ProvisioningRequisition, UploadedFile::fake()->create('pr.pdf', 10), $logistics);
         $this->documents->upload($po, D::NegotiationEmail, UploadedFile::fake()->create('email.pdf', 10), $logistics);
+        $this->documents->upload($po, D::Certificate, UploadedFile::fake()->create('certificate.pdf', 10), $logistics);
 
         for ($i = 0; $i < $quotations; $i++) {
             $this->documents->upload($po, D::Quotation, UploadedFile::fake()->create("quote{$i}.pdf", 10), $logistics);
+        }
+        if ($quotations >= 3) {
+            $this->evaluationFixture($po, $logistics);
         }
     }
 
@@ -82,7 +86,7 @@ class DocumentChecklistTest extends TestCase
         $po = $this->poAtQuotesIn();
         $this->uploadPack($po, quotations: 2); // manual requires at least 3
 
-        $this->expectException(RuntimeException::class);
+        $this->expectException(DomainException::class);
 
         $this->requisitions->submitForApproval($po, $this->user(Role::LogisticsOfficer));
     }
@@ -116,9 +120,8 @@ class DocumentChecklistTest extends TestCase
             ['part_number' => 'SHORT-1', 'description' => 'Gasket', 'quantity' => 1],
         ], isAmoRequest: true);
         $logistics = $this->user(Role::LogisticsOfficer);
-        $po = $this->requisitions->checkStock($po, $this->user(Role::StoreStaff), [$po->lines->first()->id => false]);
-        $po = $this->requisitions->markRfqSent($po, $logistics);
-        $po = $this->requisitions->markQuotesIn($po, $logistics);
+        $po->forceFill(['status' => S::QuotesIn])->save();
+        $po->refresh();
         $this->uploadPack($po);
 
         $this->requisitions->submitForApproval($po, $logistics);

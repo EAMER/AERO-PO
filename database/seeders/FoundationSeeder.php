@@ -12,6 +12,9 @@ class FoundationSeeder extends Seeder
 {
     public function run(): void
     {
+        if (! app()->environment(['local', 'testing'])) {
+            throw new \LogicException('Demo accounts are restricted to local and test environments. Use tenant:create for real company accounts.');
+        }
         TenantContext::bypass(function () {
             foreach (['aero' => 'Aero Contractors', 'demo' => 'Demo Airline'] as $slug => $name) {
                 $tenant = Tenant::firstOrCreate(['slug' => $slug], ['name' => $name]);

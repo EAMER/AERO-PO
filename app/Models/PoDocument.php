@@ -10,7 +10,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 /** Metadata for a file on the private disk; App\Services\DocumentService owns writes. */
 class PoDocument extends Model
 {
-    use BelongsToTenant;
+    use BelongsToTenant, \Illuminate\Database\Eloquent\Factories\HasFactory;
 
     protected $fillable = [
         'tenant_id', 'purchase_order_id', 'type', 'disk_path',
@@ -19,6 +19,13 @@ class PoDocument extends Model
 
     protected $casts = ['type' => DocumentType::class];
 
-    public function purchaseOrder(): BelongsTo { return $this->belongsTo(PurchaseOrder::class); }
-    public function uploader(): BelongsTo { return $this->belongsTo(User::class, 'uploaded_by'); }
+    public function purchaseOrder(): BelongsTo
+    {
+        return $this->belongsTo(PurchaseOrder::class);
+    }
+
+    public function uploader(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'uploaded_by');
+    }
 }

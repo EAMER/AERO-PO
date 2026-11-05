@@ -16,10 +16,10 @@
                 <div class="rounded-md bg-green-50 border border-green-200 px-4 py-3 text-sm text-green-800">{{ session('status') }}</div>
             @endif
 
-            @if (session('temporary_password'))
+            @if (session('encrypted_temporary_password'))
                 <div class="rounded-md bg-yellow-50 border border-yellow-300 px-4 py-3 text-sm text-yellow-900">
                     <p class="font-semibold">Temporary password for {{ session('new_user_email') }}:</p>
-                    <p class="font-mono text-base mt-1">{{ session('temporary_password') }}</p>
+                    <p class="font-mono text-base mt-1">{{ \Illuminate\Support\Facades\Crypt::decryptString(session('encrypted_temporary_password')) }}</p>
                     <p class="mt-1 text-xs text-yellow-700">This is shown once. Share it with them directly, then have them change it on first login.</p>
                 </div>
             @endif

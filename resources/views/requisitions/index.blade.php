@@ -1,57 +1,17 @@
 <x-app-layout>
-    <x-slot name="header">
-        <div class="flex items-center justify-between">
-            <h2 class="font-semibold text-xl text-gray-800 leading-tight">Requisitions</h2>
-            <a href="{{ route('requisitions.create') }}"
-               class="inline-flex items-center px-4 py-2 bg-gray-800 border border-transparent rounded-md font-semibold text-xs text-white uppercase tracking-widest hover:bg-gray-700">
-                + New requisition
-            </a>
-        </div>
-    </x-slot>
-
-    <div class="py-8">
-        <div class="max-w-6xl mx-auto sm:px-6 lg:px-8">
-
-            @if (session('status'))
-                <div class="mb-4 rounded-md bg-green-50 border border-green-200 px-4 py-3 text-sm text-green-800">
-                    {{ session('status') }}
-                </div>
-            @endif
-
-            <div class="bg-white overflow-hidden shadow-sm sm:rounded-lg">
-                <table class="min-w-full divide-y divide-gray-200">
-                    <thead class="bg-gray-50">
-                        <tr>
-                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Reference</th>
-                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
-                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Lines</th>
-                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">AMO</th>
-                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Raised</th>
-                        </tr>
-                    </thead>
-                    <tbody class="bg-white divide-y divide-gray-200">
-                        @forelse ($pos as $po)
-                            <tr class="hover:bg-gray-50 cursor-pointer" onclick="window.location='{{ route('requisitions.show', $po) }}'">
-                                <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{{ $po->reference }}</td>
-                                <td class="px-6 py-4 whitespace-nowrap">
-                                    <x-status-badge :status="$po->status" />
-                                </td>
-                                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{{ $po->lines->count() }}</td>
-                                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{{ $po->is_amo_request ? 'Yes' : 'No' }}</td>
-                                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{{ $po->created_at->format('d M Y') }}</td>
-                            </tr>
-                        @empty
-                            <tr>
-                                <td colspan="5" class="px-6 py-8 text-center text-sm text-gray-500">
-                                    No requisitions yet. <a href="{{ route('requisitions.create') }}" class="text-indigo-600 underline">Raise one</a>.
-                                </td>
-                            </tr>
-                        @endforelse
-                    </tbody>
-                </table>
-            </div>
-
-            <div class="mt-4">{{ $pos->links() }}</div>
-        </div>
-    </div>
+    <x-slot name="header"><div class="flex items-center justify-between gap-4"><h2>Requisitions</h2>@can('create', \App\Models\PurchaseOrder::class)<a href="{{ route('requisitions.create') }}" class="btn-primary"><x-icon name="plus" /> New requisition</a>@endcan</div></x-slot>
+    <p class="list-intro">Track every part requirement, from the first request to final receipt.</p>
+    @if(session('status'))<div role="status" class="mb-5 rounded-lg border border-green-200 bg-green-50 p-4 text-sm text-green-800">{{ session('status') }}</div>@endif
+    @if($errors->any())<div role="alert" class="mb-5 rounded-lg bg-red-50 p-4 text-sm text-red-800">@foreach($errors->all() as $error)<p>{{ $error }}</p>@endforeach</div>@endif
+    <section class="panel">
+        <form method="GET" action="{{ route('requisitions.index') }}" class="table-toolbar">
+            <label class="table-search"><x-icon name="search" /><span class="sr-only">Search requisitions</span><input type="search" name="search" value="{{ request('search') }}" placeholder="Search reference, part or description..." maxlength="100"></label>
+            <div class="flex flex-wrap items-center gap-3"><label class="sr-only" for="status-filter">Filter by status</label><select id="status-filter" name="status" class="filter-select"><option value="">All statuses</option>@foreach($statuses as $status)<option value="{{ $status->value }}" @selected(request('status') === $status->value)>{{ ucwords(str_replace('_', ' ', $status->value)) }}</option>@endforeach</select><button class="btn-secondary" type="submit">Apply filters</button>@if(request()->filled('search') || request()->filled('status'))<a href="{{ route('requisitions.index') }}" class="text-link">Clear</a>@endif</div>
+        </form>
+        <div class="table-scroll"><table><thead><tr><th>Reference / part</th><th>Status</th><th>Requested by</th><th>Lines</th><th>Request type</th><th>Raised</th><th></th></tr></thead><tbody>
+            @forelse($pos as $po)<tr><td><a href="{{ route('requisitions.show', $po) }}" class="reference-link">{{ $po->reference }}</a><span class="reference-description">{{ $po->lines->first()?->part_number ?? 'Part requirement' }}@if($po->lines->first()) · {{ $po->lines->first()->description }}@endif</span></td><td><x-status-badge :status="$po->status" /></td><td>{{ $po->requester?->name ?? 'Unavailable' }}</td><td>{{ $po->lines->count() }}</td><td><span class="text-xs {{ $po->is_amo_request ? 'font-semibold text-indigo-700' : 'text-gray-500' }}">{{ $po->is_amo_request ? 'AMO' : 'Standard' }}</span></td><td class="whitespace-nowrap">{{ $po->created_at->format('d M Y') }}</td><td><a href="{{ route('requisitions.show', $po) }}" class="text-link" aria-label="Open {{ $po->reference }}"><x-icon name="arrow" /></a></td></tr>
+            @empty<tr><td colspan="7"><div class="empty-state"><span class="empty-symbol"><x-icon name="search" /></span><strong>{{ request()->filled('search') || request()->filled('status') ? 'No matching requisitions' : 'Your requisitions start here' }}</strong><p>{{ request()->filled('search') || request()->filled('status') ? 'Try a different reference, part number or status.' : 'New part requirements will appear in this workspace.' }}</p></div></td></tr>@endforelse
+        </tbody></table></div>
+        <div class="table-footer">@if($pos->hasPages()){{ $pos->links() }}@else{{ number_format($pos->total()) }} {{ \Illuminate\Support\Str::plural('requisition', $pos->total()) }}@endif</div>
+    </section>
 </x-app-layout>

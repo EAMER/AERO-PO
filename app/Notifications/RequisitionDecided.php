@@ -3,31 +3,11 @@
 namespace App\Notifications;
 
 use App\Models\PurchaseOrder;
-use Illuminate\Bus\Queueable;
-use Illuminate\Notifications\Messages\MailMessage;
-use Illuminate\Notifications\Notification;
 
-/** Sent to the requester when their PO reaches a terminal state: closed or rejected. */
-class RequisitionDecided extends Notification
+class RequisitionDecided extends WorkflowMessage
 {
-    use Queueable;
-
-    public function __construct(private PurchaseOrder $po) {}
-
-    public function via($notifiable): array
+    public function __construct(PurchaseOrder $order)
     {
-        return ['mail'];
-    }
-
-    public function toMail($notifiable): MailMessage
-    {
-        $closed = $this->po->status->value === 'closed';
-
-        $mail = (new MailMessage)->subject("{$this->po->reference} is {$this->po->status->value}");
-
-        return $closed
-            ? $mail->line("Your requisition {$this->po->reference} has been closed and fulfilled.")
-            : $mail->line("Your requisition {$this->po->reference} was rejected.")
-                   ->line('Check the status history on the requisition page for the reason.');
+        parent::__construct($order->reference.' is '.$order->status->value, 'Your requisition '.$order->reference.' is '.$order->status->value.'. See its history for details.', route('requisitions.show', ['tenant' => $order->tenant->slug, 'purchaseOrder' => $order->id]));
     }
 }

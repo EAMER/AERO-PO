@@ -3,28 +3,12 @@
 namespace App\Notifications;
 
 use App\Models\ApprovalQuery;
-use Illuminate\Bus\Queueable;
-use Illuminate\Notifications\Messages\MailMessage;
-use Illuminate\Notifications\Notification;
 
-class ApprovalQueryWasAnswered extends Notification
+class ApprovalQueryWasAnswered extends WorkflowMessage
 {
-    use Queueable;
-
-    public function __construct(private ApprovalQuery $query) {}
-
-    public function via($notifiable): array
+    public function __construct(ApprovalQuery $query)
     {
-        return ['mail'];
-    }
-
-    public function toMail($notifiable): MailMessage
-    {
-        $po = $this->query->approval->approvable;
-
-        return (new MailMessage)
-            ->subject("Answered: {$po->reference}")
-            ->line("{$this->query->target->name} answered your question: \"{$this->query->answer}\"")
-            ->action('View', url('/requisitions/'.$po->id));
+        $order = $query->approval->order();
+        parent::__construct('Answered: '.$order->reference, $query->target->name.' answered your question: '.$query->answer, route('requisitions.show', ['tenant' => $order->tenant->slug, 'purchaseOrder' => $order->id]));
     }
 }

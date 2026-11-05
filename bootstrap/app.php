@@ -1,8 +1,13 @@
 <?php
 
+use App\Http\Middleware\EnsureUserBelongsToTenant;
+use App\Http\Middleware\ResolveTenant;
+use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
+use Illuminate\Http\Request;
+use Illuminate\Session\Middleware\StartSession;
 
 return Application::configure(basePath: dirname(__DIR__))
     ->withRouting(
@@ -12,8 +17,8 @@ return Application::configure(basePath: dirname(__DIR__))
     )
     ->withMiddleware(function (Middleware $middleware) {
         $middleware->alias([
-            'tenant' => \App\Http\Middleware\ResolveTenant::class,
-            'tenant.user' => \App\Http\Middleware\EnsureUserBelongsToTenant::class,
+            'tenant' => ResolveTenant::class,
+            'tenant.user' => EnsureUserBelongsToTenant::class,
         ]);
 
         // Tenant must resolve before EVERYTHING else that depends on it
@@ -21,10 +26,17 @@ return Application::configure(basePath: dirname(__DIR__))
         // priority list rather than trying to slot it in relative to one
         // specific middleware further down.
         $middleware->prependToPriorityList(
-            before: \Illuminate\Session\Middleware\StartSession::class,
-            prepend: \App\Http\Middleware\ResolveTenant::class,
+            before: StartSession::class,
+            prepend: ResolveTenant::class,
         );
     })
     ->withExceptions(function (Exceptions $exceptions) {
-        //
+        $exceptions->render(function (UniqueConstraintViolationException $exception, Request $request) {
+            $message = 'A record with this reference already exists. Refresh the page and use a unique reference.';
+            if ($request->expectsJson()) {
+                return response()->json(['message' => $message, 'errors' => ['reference' => [$message]]], 422);
+            }
+
+            return redirect()->back()->withInput($request->except(['password', 'password_confirmation', 'current_password']))->withErrors(['reference' => $message]);
+        });
     })->create();

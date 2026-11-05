@@ -10,11 +10,13 @@ use Illuminate\Notifications\Notifiable;
 
 class User extends Authenticatable
 {
-    use HasFactory, Notifiable, BelongsToTenant;
+    use BelongsToTenant, HasFactory, Notifiable;
 
     protected $fillable = ['tenant_id', 'name', 'email', 'password', 'role', 'is_active'];
 
     protected $hidden = ['password', 'remember_token'];
+
+    protected $attributes = ['is_active' => true, 'role' => 'requester'];
 
     protected function casts(): array
     {

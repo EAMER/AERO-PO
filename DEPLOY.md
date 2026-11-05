@@ -1,107 +1,74 @@
-# Deploying Aero PO System
+# Deploying Aero PO
 
-Checklist for moving this off `php artisan serve` onto a real server. Nothing
-here has been run or tested - treat it as a starting checklist, not a verified
-runbook.
+The application has automated workflow and security tests. Production infrastructure, credentials, mail delivery and the operational DigiMaint handover must be configured and checked in the deployment environment.
 
-## 1. Environment
+## Environment and hosting
 
-```
+Point the web server at `public/`. Configure the tenant base domain, wildcard DNS and TLS for `{slug}.yourdomain.com`. Force HTTPS at the trusted reverse proxy or web server.
+
+```dotenv
+APP_NAME="Aero PO"
 APP_ENV=production
 APP_DEBUG=false
 APP_URL=https://yourdomain.com
-APP_DOMAIN=yourdomain.com          # tenants become {slug}.yourdomain.com
-SESSION_DOMAIN=.yourdomain.com     # leading dot: cookie valid across all tenant subdomains... 
-                                    # ...or leave unset for host-only cookies (one login per tenant, more isolated)
-```
-Decide SESSION_DOMAIN deliberately: a shared `.yourdomain.com` cookie means a
-browser logged into `aero.yourdomain.com` carries a session cookie to
-`demo.yourdomain.com` too (though EnsureUserBelongsToTenant still blocks
-cross-tenant use). Host-only (omit SESSION_DOMAIN) is more isolated but means
-logging into each tenant separately even in the same browser.
-
-## 2. DNS
-
-A wildcard record so every tenant subdomain resolves:
-```
-*.yourdomain.com   A       <server IP>
-yourdomain.com     A       <server IP>
+APP_DOMAIN=yourdomain.com
+SESSION_DOMAIN=null
+SESSION_SECURE_COOKIE=true
+QUEUE_CONNECTION=database
+MAIL_MAILER=smtp
+MAIL_HOST=your-smtp-host
+MAIL_FROM_ADDRESS=procurement@yourdomain.com
 ```
 
-## 3. TLS
+Use production database and mail credentials. Host-only cookies keep each tenant login separate. Set the application key once and preserve it across releases; it also protects session data and encrypted temporary credentials.
 
-Wildcard cert (`*.yourdomain.com`) via Let's Encrypt (DNS-01 challenge,
-since wildcard certs can't use HTTP-01) or your host's managed cert. Force
-HTTPS in `bootstrap/app.php` or at the reverse proxy.
+## Release commands
 
-## 4. Mail
+Back up the database and private documents before migration. From the release directory:
 
-Currently `MAIL_MAILER=log` (the Laravel default) - notifications write to
-`storage/logs/laravel.log` instead of sending anywhere. Before relying on
-notifications for real:
-```
-MAIL_MAILER=smtp   # or ses, postmark, etc.
-MAIL_HOST=...
-MAIL_FROM_ADDRESS=noreply@yourdomain.com
-```
-Send a test: `php artisan tinker` -> `Notification::route('mail', 'you@x.com')->notify(new \App\Notifications\RequisitionDecided($po))`.
-
-## 5. Queue (optional but recommended once mail is real)
-
-Notifications currently send synchronously (the `Queueable` trait is used
-but the classes don't implement `ShouldQueue`) - a slow mail provider will
-slow down the request. To queue them: add `implements ShouldQueue` to each
-notification class, then run a worker:
-```
-QUEUE_CONNECTION=database   # or redis
-php artisan queue:table && php artisan migrate
-php artisan queue:work --tries=3
-```
-Keep the worker running via Supervisor or systemd, not just a foreground
-terminal.
-
-## 6. Database
-
-- Point `DB_*` at the production MySQL instance, not local Workbench.
-- Back up before the first production migration.
-- Set up regular backups (`mysqldump` on a cron, or your host's managed
-  backup feature) - this holds every tenant's purchase orders and documents.
-
-## 7. File storage
-
-`storage/app/private` holds every uploaded document (quotations, invoices,
-AWBs, etc.). On a single server this is fine as local disk, but:
-- Include it in your backup routine.
-- If you ever scale to multiple app servers, local disk won't be shared -
-  move to S3 or similar and update the `'private'` disk driver in
-  `config/filesystems.php`.
-
-## 8. Deploy steps (each release)
-
-```
+```bash
 composer install --no-dev --optimize-autoloader
-npm ci && npm run build
+npm ci
+npm run build
 php artisan migrate --force
 php artisan config:cache
 php artisan route:cache
 php artisan view:cache
-php artisan storage:link   # only if you ever add a public disk
+php artisan queue:restart
 ```
-Skip `config:cache` in any environment where you still edit `.env` directly
-without restarting - cached config ignores further `.env` changes until
-`php artisan config:clear`.
 
-## 9. First production login
+The procurement migration adds structured commercial, receiving, handover and audit records without inventing missing historical facts. Existing orders need their references, commercial approvals and actual DigiMaint evidence reconciled before they can satisfy the new gates.
 
-Replace the seeded `*.test` accounts - they're fine for development but
-shouldn't exist in production. Use `/users` (tenant admin only) to create
-real accounts instead. Consider deleting or deactivating the seeded ones
-per tenant once real users exist.
+The repository already includes queue and cache table migrations. A public storage link is unnecessary for procurement documents.
 
-## 10. Still open before go-live
+## Queue and delivery
 
-- DigiMaint integration (stock check + the close-out handover) is currently
-  manual/fake - see the project plan doc's open decisions.
-- KPIs for the TLM are undefined.
-- No automated backup/monitoring/alerting has been set up - this document
-  only lists what's needed, not a working implementation of any of it.
+Run a managed worker continuously, for example under Supervisor or systemd:
+
+```bash
+php artisan queue:work --tries=1 --timeout=120
+```
+
+RFQ and PO delivery jobs are dispatched after database commit and explicitly restore their tenant context. PO status changes to sent only after the mail transport returns successfully. Approval and shipment notifications are queued too. Configure process restart and failed-job monitoring, and restart workers on each release.
+
+Review failures with `php artisan queue:failed`. A connection failure can have an ambiguous delivery outcome. Check the provider and vendor before retrying an RFQ or reissuing a PO. Use the application delivery controls; a failed delivery does not authorize bypassing CFO approval. The log mailer is suitable for local development only.
+
+## Private records and backups
+
+Documents and generated PDFs use the `private` disk, currently `storage/app/private`, and authenticated tenant-scoped download endpoints. Include this directory and the database in backups; keep uploaded files outside the web root. If running multiple app servers, configure shared private storage and include the required storage driver. Verify restores and monitor queue failures, application errors and storage capacity.
+
+## Company onboarding
+
+Do not run the demonstration seeder in production. Provision the first administrator using:
+
+```bash
+php artisan tenant:create aero "Aero Contractors" admin@your-company.example
+```
+
+Change the generated password after first login. The administrator creates users, approves the appropriate supplier/carrier records and assigns approvers. Role order follows the documented process. Both CIA and post-receipt net-terms invoices currently use Cost Control, TLM, TD, Audit, Payables and Treasury; confirm this operational choice with the process owner. TLMs set their own SLA and KPI targets in Settings.
+
+## DigiMaint and acceptance
+
+Use the [manual handover procedure](docs/DIGIMAINT_MANUAL_PROCESS.md). DigiMaint remains authoritative. Each stock check, receipt or stock issue needs a reference, actual action time, quantity, private evidence and independent Store Supervisor verification. Closure requires verified receipts or issues, plus the applicable serviceable-label and Cardex records. Closing an order does not post stock in DigiMaint.
+
+Before operational use, exercise one CIA order, one net-terms order, a return for correction, a freight shipment and a partial delivery with the nominated staff. Confirm actual mail delivery and that staff can complete and independently verify the DigiMaint records. Net-terms payment follows receipt and can remain open after procurement closure; use the finance queue to finish it. Automated tests do not verify the company's DigiMaint installation or its physical receiving procedures.

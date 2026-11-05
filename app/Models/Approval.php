@@ -17,22 +17,42 @@ class Approval extends Model
     protected $fillable = [
         'tenant_id', 'approvable_type', 'approvable_id', 'stage', 'step_order',
         'role', 'decision', 'decided_by', 'decided_at', 'note',
+        'round', 'is_active', 'assigned_to', 'due_at', 'opened_at', 'snapshot',
     ];
 
     protected $casts = [
         'role' => Role::class,
         'decision' => ApprovalDecision::class,
         'decided_at' => 'datetime',
+        'due_at' => 'datetime', 'round' => 'integer', 'is_active' => 'boolean',
+        'opened_at' => 'datetime',
+        'snapshot' => 'array',
     ];
 
-    public function approvable(): MorphTo { return $this->morphTo(); }
+    public function approvable(): MorphTo
+    {
+        return $this->morphTo();
+    }
 
-    public function decidedBy(): BelongsTo { return $this->belongsTo(User::class, 'decided_by'); }
+    public function decidedBy(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'decided_by');
+    }
 
-    public function queries(): HasMany { return $this->hasMany(ApprovalQuery::class); }
+    public function queries(): HasMany
+    {
+        return $this->hasMany(ApprovalQuery::class);
+    }
 
     public function hasOpenQuery(): bool
     {
         return $this->queries()->whereNull('answered_at')->exists();
+    }
+
+    public function order(): ?PurchaseOrder
+    {
+        $subject = $this->approvable;
+
+        return $subject instanceof PurchaseOrder ? $subject : $subject?->purchaseOrder;
     }
 }

@@ -1,0 +1,16 @@
+@if($po->payment_terms)
+<section class="bg-white p-6 rounded shadow-sm space-y-4"><h3 class="font-semibold">Payment — {{ $po->payment_terms === 'cia' ? 'cash in advance' : 'net terms' }}</h3>
+@if($logistics && $stage === 'acknowledged' && $po->payment_terms === 'net')<form method="POST" action="{{ route('requisitions.ready-to-ship', $po) }}">@csrf<x-primary-button>Ready to ship on net terms</x-primary-button></form>@endif
+@if($po->invoice)<p>Invoice {{ $po->invoice->reference }} · {{ $po->invoice->currency }} {{ \App\Support\Money::format($po->invoice->amount_minor) }} · <strong>{{ $po->invoice->status }}</strong> · Revision {{ $po->invoice->revision }}</p>@endif
+@php($invoiceEligible = $po->payment_terms === 'cia' ? in_array($stage, ['acknowledged', 'awaiting_payment']) : in_array($stage, ['received', 'grn_issued', 'closed']))
+@if(($logistics || $payables) && $invoiceEligible && (!$po->invoice || in_array($po->invoice->status, ['draft', 'returned'])))
+<form method="POST" action="{{ route('procurement.action', [$po, 'action' => 'invoice']) }}" class="grid sm:grid-cols-3 gap-3">@csrf
+<label>Invoice reference<input class="field" name="reference" value="{{ old('reference', $po->invoice?->reference) }}" required maxlength="100"></label><label>Invoice total<input class="field" name="amount" type="number" step="0.01" min="0" value="{{ old('amount', \App\Support\Money::format($po->total_minor)) }}" required></label><label>Currency<input class="field" name="currency" value="{{ $po->currency }}" required readonly></label>
+<label>Invoice document<select class="field" name="po_document_id" required>@foreach($po->documents->where('type', $po->payment_terms === 'cia' ? \App\Enums\DocumentType::ProformaInvoice : \App\Enums\DocumentType::CommercialInvoice) as $document)<option value="{{ $document->id }}">{{ $document->original_filename }}</option>@endforeach</select></label><label class="sm:col-span-2">Reason / revision notes<input class="field" name="reason" value="{{ old('reason') }}" required maxlength="1000"></label><div><x-primary-button>Save invoice</x-primary-button></div></form>
+@endif
+@if(($logistics || $payables) && $po->invoice?->status === 'draft')<form method="POST" action="{{ route('procurement.action', [$po, 'action' => 'submit-invoice']) }}">@csrf<x-primary-button>Submit finance approval chain</x-primary-button></form>@endif
+@if($treasury && $po->invoice?->status === 'approved')<p class="text-sm">{{ $po->payment_terms === 'cia' ? 'Upload the telex copy, then record the actual payment reference.' : 'Record the actual payment reference after completing payment.' }}</p><form method="POST" action="{{ route('procurement.action', [$po, 'action' => 'pay']) }}" class="flex flex-wrap items-end gap-3">@csrf<label>Payment reference<input class="field" name="payment_reference" required maxlength="255"></label><x-primary-button>Confirm payment completed</x-primary-button></form>@endif
+@if($po->payment_terms === 'net' && !$invoiceEligible)<p class="text-sm text-gray-600">The finance workflow opens after Stores confirms all ordered quantities received.</p>@endif
+@if($po->invoice?->paid_at)<p class="text-sm text-green-800">Paid {{ $po->invoice->paid_at->format('d M Y H:i T') }} · {{ $po->invoice->payment_reference }}</p>@endif
+</section>
+@endif

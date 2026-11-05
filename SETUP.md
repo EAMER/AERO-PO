@@ -1,66 +1,80 @@
-# Aero PO System - Laravel foundation (Person 1)
+# Local setup
 
-Tenancy (subdomain + fail-closed global scope), roles, PO status enum with
-transition map + audit log, sequential approvals, and tests. Drop-in bundle for a
-fresh Laravel app.
+## Requirements
 
-## 1. Create the app (run locally)
+PHP 8.3 or later with the extensions required by Composer, Composer, Node.js compatible with the locked Vite version, npm, and SQLite or MySQL. This implementation was tested on PHP 8.5 with SQLite in memory.
+
+## Install
+
+Run these commands from the application directory:
 
 ```bash
-composer create-project laravel/laravel aero-po
-cd aero-po
-composer require laravel/breeze --dev
-php artisan breeze:install blade
+composer install
 ```
 
-## 2. Copy the bundle in
+Copy `.env.example` to `.env` if it does not exist, then configure:
 
-Copy `app/`, `config/`, `database/`, `tests/` from this bundle over the app
-(this replaces `app/Models/User.php`). Then apply the two snippets by hand:
-
-- `routes/web.snippet.php`   -> into `routes/web.php` (Breeze's `auth.php` require goes inside the domain group)
-- `bootstrap-app.snippet.php` -> into `bootstrap/app.php`
-
-## 3. Configure
-
-`.env`:
-
-```
+```dotenv
+APP_NAME="Aero PO"
+APP_ENV=local
+APP_URL=http://localhost:8000
 APP_DOMAIN=localhost
-SESSION_DOMAIN=null        # host-only cookies: one session per tenant subdomain
-DB_CONNECTION=mysql
-DB_DATABASE=aero_po
+SESSION_DOMAIN=null
+DB_CONNECTION=sqlite
+QUEUE_CONNECTION=database
+MAIL_MAILER=log
 ```
 
-`database/seeders/DatabaseSeeder.php`: replace the body of `run()` with
-`$this->call(FoundationSeeder::class);` and delete the default `User::factory()`
-line (it has no tenant, so it is refused by design).
+For SQLite, create `database/database.sqlite` if it does not exist. For MySQL, configure the database connection and create the empty database first. Keep an existing application's `.env`, key and database; do not regenerate its key.
 
-Also remove Breeze's public registration route/controller: tenant users are created by a tenant admin, not self-registered.
-
-## 4. Run
+On a new installation only:
 
 ```bash
-php artisan migrate --seed
+php artisan key:generate
+```
+
+Install the schema and frontend assets:
+
+```bash
+php artisan migrate
+npm ci
+npm run build
+```
+
+## First administrator
+
+Create a company and its administrator:
+
+```bash
+php artisan tenant:create aero "Aero Contractors" admin@your-company.example
+```
+
+The command prints a generated initial password. Share it privately and change it after first login. Open `http://aero.localhost:8000` after starting the server. Create other tenant users through Users, assign roles, approve vendors and carriers, and configure approver assignments and SLA/KPI targets through Settings.
+
+For a disposable local demo, `php artisan db:seed` creates the `aero` and `demo` tenants, role accounts such as `tlm@aero.test` with password `password`, and sample unapproved vendors. Default-password seeding is refused outside local/testing. Use an empty demo database rather than seeding an operational installation.
+
+## Run
+
+Use separate terminals:
+
+```bash
 php artisan serve
 ```
 
-Open http://aero.localhost:8000 (browsers resolve `*.localhost`) and log in as
-`tlm@aero.test` / `password` (one seeded user per role, for tenants `aero` and `demo`).
-
 ```bash
-php artisan test
+php artisan queue:work --tries=1
 ```
 
-## Rules for the other two developers
+For frontend development, run `npm run dev` in another terminal. The worker is required for RFQs, POs and notifications. The log mailer writes locally; configure SMTP or another supported mailer to deliver messages. Review delivery failures before retrying, because a mail provider can accept a message before a connection fails.
 
-- Change `status` only via `WorkflowService::transition()`; react via `PurchaseOrderTransitioned`.
-- Every new model uses `BelongsToTenant` and every new table has `tenant_id` (a test enforces the trait).
-- Only Person 1 edits `PurchaseOrderStatus`, `Role`, and shared migrations.
+DigiMaint transfers are performed manually. Follow [the operating procedure](docs/DIGIMAINT_MANUAL_PROCESS.md); records require real references, evidence, explicit UTC offsets and a separate supervisor verification.
 
-## Known follow-ups
+## Test and format
 
-- Breeze's password-reset tokens are keyed by email; the same email in two tenants will collide. Scope them by tenant before go-live.
-- `returned_by_approver` currently goes back to `quotes_in` or `pending_approval`; a CFO return could need its own path.
-- Approval steps per tenant (e.g. always adding HAMO when `is_amo_request`) are chosen by the caller for now; move to `tenants.settings`.
-- I could not run PHP here, so this bundle is untested. Run `php artisan test` first and send me any failures.
+```bash
+php vendor/phpunit/phpunit/phpunit
+php vendor/bin/pint --dirty --format agent
+npm run build
+```
+
+PHPUnit forces SQLite `:memory:` independently of the application's normal database. It must have access to `pdo_sqlite`. Vendor dispatch and handover tests use fakes; they do not send external messages or update DigiMaint.

@@ -3,8 +3,12 @@
 namespace App\Services;
 
 use App\Enums\PurchaseOrderStatus as S;
+use App\Models\Approval;
+use App\Models\KpiDefinition;
 use App\Models\PoStatusLog;
 use App\Models\PurchaseOrder;
+use App\Support\TenantContext;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
 
 /**
@@ -19,10 +23,7 @@ class ReportService
     /** @return array<string, int> status value => number of POs */
     public function statusCounts(): array
     {
-        return PurchaseOrder::all()
-            ->groupBy(fn (PurchaseOrder $po) => $po->status->value)
-            ->map->count()
-            ->all();
+        return PurchaseOrder::selectRaw('status, COUNT(*) as total')->groupBy('status')->pluck('total', 'status')->map(fn ($count) => (int) $count)->all();
     }
 
     /** Average days from raised to closed, across closed POs. Null if none closed yet. */
@@ -106,5 +107,43 @@ class ReportService
             ->sortByDesc('days')
             ->take($limit)
             ->values();
+    }
+
+    public function stageTimers(): Collection
+    {
+        $targets = TenantContext::get()?->settings['sla_hours'] ?? [];
+
+        return PurchaseOrder::whereNotIn('status', [S::Closed->value, S::Rejected->value, S::Cancelled->value])
+            ->withMax('logs', 'created_at')->get()->map(function (PurchaseOrder $po) use ($targets) {
+                $since = Carbon::parse($po->logs_max_created_at ?? $po->created_at);
+                $hours = max(0, (now()->getTimestamp() - $since->getTimestamp()) / 3600);
+                $target = $targets[$po->status->value] ?? null;
+
+                return ['po' => $po, 'hours' => round($hours, 1), 'target_hours' => $target, 'overdue' => $target !== null && $target !== '' && $hours > (float) $target];
+            });
+    }
+
+    public function approvalTimers(): Collection
+    {
+        return Approval::with('approvable')->where('is_active', true)->where('decision', 'pending')->whereNotNull('opened_at')->get()
+            ->map(fn ($approval) => ['approval' => $approval, 'hours' => round(max(0, now()->getTimestamp() - $approval->opened_at->getTimestamp()) / 3600, 1), 'overdue' => $approval->due_at && $approval->due_at->isPast()]);
+    }
+
+    public function kpis(): Collection
+    {
+        $counts = $this->statusCounts();
+        $total = array_sum($counts);
+        $values = [
+            'average_cycle_days' => $this->averageCycleDays(),
+            'open_orders' => $total - ($counts['closed'] ?? 0) - ($counts['rejected'] ?? 0) - ($counts['cancelled'] ?? 0),
+            'closed_orders' => $counts['closed'] ?? 0,
+            'rejection_rate' => $total ? round(($counts['rejected'] ?? 0) / $total * 100, 2) : null,
+        ];
+
+        return KpiDefinition::all()->map(function ($definition) use ($values) {
+            $actual = $values[$definition->metric] ?? null;
+
+            return ['definition' => $definition, 'actual' => $actual, 'met' => $actual === null ? null : ($definition->direction === 'at_most' ? $actual <= $definition->target : $actual >= $definition->target)];
+        });
     }
 }

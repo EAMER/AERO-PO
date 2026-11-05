@@ -2,12 +2,16 @@
 @php
     $value = $status instanceof \App\Enums\PurchaseOrderStatus ? $status->value : $status;
     $color = match (true) {
-        in_array($value, ['closed', 'fulfilled_from_stock', 'grn_issued']) => 'bg-green-100 text-green-800',
-        in_array($value, ['rejected', 'cancelled']) => 'bg-red-100 text-red-800',
-        in_array($value, ['pending_approval', 'pending_cfo', 'awaiting_payment']) => 'bg-yellow-100 text-yellow-800',
-        default => 'bg-blue-100 text-blue-800',
+        in_array($value, ['closed', 'fulfilled_from_stock', 'grn_issued']) => 'status-success',
+        in_array($value, ['rejected', 'cancelled']) => 'status-danger',
+        in_array($value, ['pending_approval', 'pending_cfo', 'awaiting_payment', 'returned_by_evaluation', 'returned_by_cfo']) => 'status-warning',
+        default => 'status-info',
+    };
+    $label = match($value) {
+        'pending_cfo' => 'Pending CFO', 'po_approved' => 'PO approved', 'po_sent' => 'PO sent',
+        'rfq_sent' => 'RFQs sent', 'grn_issued' => 'GRN issued',
+        'returned_by_evaluation' => 'Evaluation returned', 'returned_by_cfo' => 'Returned by CFO',
+        default => ucwords(str_replace('_', ' ', $value)),
     };
 @endphp
-<span {{ $attributes->merge(['class' => "inline-flex px-2 py-1 text-xs font-semibold rounded-full $color"]) }}>
-    {{ ucwords(str_replace('_', ' ', $value)) }}
-</span>
+<span {{ $attributes->merge(['class' => "status-badge $color"]) }}>{{ $label }}</span>

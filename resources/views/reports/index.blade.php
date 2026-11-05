@@ -1,28 +1,15 @@
 <x-app-layout>
     <x-slot name="header">
-        <h2 class="font-semibold text-xl text-gray-800 leading-tight">Reports</h2>
+        <h2 class="font-semibold text-xl text-gray-800 leading-tight">Reports & insights</h2>
     </x-slot>
 
     <div class="py-8">
         <div class="max-w-5xl mx-auto sm:px-6 lg:px-8 space-y-6">
 
-            {{-- Headline numbers --}}
-            <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                <div class="bg-white shadow-sm sm:rounded-lg p-6">
-                    <p class="text-xs uppercase text-gray-500">Total requisitions</p>
-                    <p class="mt-1 text-3xl font-semibold text-gray-900">{{ $total }}</p>
-                </div>
-                <div class="bg-white shadow-sm sm:rounded-lg p-6">
-                    <p class="text-xs uppercase text-gray-500">Closed</p>
-                    <p class="mt-1 text-3xl font-semibold text-gray-900">{{ $counts['closed'] ?? 0 }}</p>
-                </div>
-                <div class="bg-white shadow-sm sm:rounded-lg p-6">
-                    <p class="text-xs uppercase text-gray-500">Average cycle time</p>
-                    <p class="mt-1 text-3xl font-semibold text-gray-900">
-                        {{ $averageCycleDays !== null ? $averageCycleDays.' days' : '—' }}
-                    </p>
-                    <p class="mt-1 text-xs text-gray-400">Raised to closed. Needs at least one closed PO.</p>
-                </div>
+            <div class="stats-grid report-stats">
+                <article class="stat-card"><div class="stat-top"><span class="stat-label">Total requisitions</span><span class="stat-icon"><x-icon name="clipboard" /></span></div><p class="stat-value">{{ number_format($total) }}</p><p class="stat-note">All requests in this company</p></article>
+                <article class="stat-card"><div class="stat-top"><span class="stat-label">Closed orders</span><span class="stat-icon"><x-icon name="check" /></span></div><p class="stat-value">{{ number_format($counts['closed'] ?? 0) }}</p><p class="stat-note">Verified and completed</p></article>
+                <article class="stat-card"><div class="stat-top"><span class="stat-label">Average cycle time</span><span class="stat-icon"><x-icon name="clock" /></span></div><p class="stat-value">{{ $averageCycleDays !== null ? $averageCycleDays : '—' }}@if($averageCycleDays !== null)<span class="text-sm font-medium tracking-normal text-gray-400"> days</span>@endif</p><p class="stat-note">From request to closure</p></article>
             </div>
 
             {{-- Longest waiting --}}
@@ -79,9 +66,10 @@
                 </div>
             </div>
 
-            <p class="text-xs text-gray-400">
-                These figures report what happened. They aren't measured against targets because KPIs haven't been defined yet.
-            </p>
+            <section class="bg-white p-6 rounded shadow-sm space-y-3"><h3 class="font-semibold">Tenant-defined KPIs</h3>@forelse($kpis as $row)<p>{{ $row['definition']->name }} · Actual {{ $row['actual'] ?? 'No completed data' }} · {{ str_replace('_', ' ', $row['definition']->direction) }} {{ $row['definition']->target }} · {{ $row['met'] === null ? 'Unmeasured' : ($row['met'] ? 'Target met' : 'Outside target') }}</p>@empty<p>The TLM has not defined KPI targets.</p>@endforelse</section>
+            <section class="bg-white p-6 rounded shadow-sm space-y-3"><h3 class="font-semibold">Current-stage SLA timers</h3>@forelse($stageTimers as $row)<p class="{{ $row['overdue'] ? 'text-red-700' : 'text-gray-700' }}"><a class="underline" href="{{ route('requisitions.show', $row['po']) }}">{{ $row['po']->reference }}</a> · {{ $row['po']->status->value }} · {{ $row['hours'] }} hours · Target {{ $row['target_hours'] ?: 'undefined' }} {{ $row['overdue'] ? '— overdue' : '' }}</p>@empty<p>No open orders.</p>@endforelse</section>
+            <section class="bg-white p-6 rounded shadow-sm space-y-3"><h3 class="font-semibold">Open approval-step timers</h3>@forelse($approvalTimers as $row)<p class="{{ $row['overdue'] ? 'text-red-700' : 'text-gray-700' }}"><a class="underline" href="{{ route('requisitions.show', $row['approval']->order()->id) }}">{{ $row['approval']->order()->reference }}</a> · {{ $row['approval']->stage }} · {{ $row['approval']->role->value }} · {{ $row['hours'] }} hours · Due {{ $row['approval']->due_at?->format('d M Y H:i T') ?? 'not defined' }}</p>@empty<p>No open approval steps.</p>@endforelse</section>
+            <section class="bg-white p-6 rounded shadow-sm space-y-3"><h3 class="font-semibold">Manual DigiMaint entries awaiting resolution</h3>@forelse($pendingHandovers as $handover)<p><a class="underline" href="{{ route('requisitions.show', $handover->purchaseOrder) }}">{{ $handover->purchaseOrder->reference }}</a> · {{ $handover->activity }} · {{ $handover->transaction_reference }} · {{ $handover->status }}</p>@empty<p>No unresolved handover entries.</p>@endforelse</section>
         </div>
     </div>
 </x-app-layout>

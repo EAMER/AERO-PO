@@ -5,180 +5,180 @@ namespace Tests\Feature;
 use App\Enums\DocumentType as D;
 use App\Enums\PurchaseOrderStatus as S;
 use App\Enums\Role;
-use App\Models\Tenant;
-use App\Models\User;
-use App\Services\DocumentService;
-use App\Services\RequisitionService;
+use App\Jobs\SendProcurementMail;
+use App\Models\PurchaseOrder;
+use App\Models\Vendor;
+use App\Services\ReceivingService;
 use App\Services\ShippingService;
-use App\Support\TenantContext;
-use Illuminate\Foundation\Testing\RefreshDatabase;
-use Illuminate\Http\UploadedFile;
-use Illuminate\Support\Facades\Storage;
-use InvalidArgumentException;
-use RuntimeException;
-use Tests\TestCase;
+use App\Services\SourcingService;
+use Tests\ProcurementTestCase;
 
-/** 7.1.9-7.1.20: dispatch, delivery, receipt, GRN, Cardex, and close-out. */
-class ShippingAndReceivingTest extends TestCase
+class ShippingAndReceivingTest extends ProcurementTestCase
 {
-    use RefreshDatabase;
-
-    private ShippingService $shipping;
-    private DocumentService $documents;
-    private User $logistics;
-    private User $store;
-
-    protected function setUp(): void
+    private function poAtReadyToShip(): PurchaseOrder
     {
-        parent::setUp();
-        Storage::fake('private');
-        TenantContext::set(Tenant::create(['name' => 'Aero', 'slug' => 'aero']));
+        $order = $this->raisedOrder();
+        $this->document($order, D::Certificate);
+        $order->forceFill(['status' => S::ReadyToShip])->save();
 
-        $this->shipping = app(ShippingService::class);
-        $this->documents = app(DocumentService::class);
-        $this->logistics = User::create(['name' => 'L', 'email' => 'l@aero.test', 'password' => 'x', 'role' => Role::LogisticsOfficer]);
-        $this->store = User::create(['name' => 'S', 'email' => 's@aero.test', 'password' => 'x', 'role' => Role::StoreStaff]);
+        return $order->fresh();
     }
 
-    protected function tearDown(): void
+    private function lightShipment(): PurchaseOrder
     {
-        TenantContext::flush();
-        parent::tearDown();
+        $order = $this->poAtReadyToShip();
+        $courier = Vendor::factory()->approved()->create(['kind' => 'courier']);
+
+        return app(ShippingService::class)->recordShipmentDetails($order, $this->person(Role::LogisticsOfficer), 10, false, $courier->id);
     }
 
-    private function poAtReadyToShip()
+    private function completeCourierPack(PurchaseOrder $order): PurchaseOrder
     {
-        $po = app(RequisitionService::class)->raise('PO-1', $this->logistics, [
-            ['part_number' => 'SHORT-1', 'description' => 'Gasket', 'quantity' => 1],
-        ]);
-        $po->forceFill(['status' => S::ReadyToShip])->save();
+        $this->document($order, D::CustomsDutyReceipt);
+        $this->document($order, D::AirwayBill);
 
-        return $po->fresh();
+        return app(ShippingService::class)->markCustomsDutyPaid($order, $this->person(Role::LogisticsOfficer));
+    }
+
+    private function approveFreight(PurchaseOrder $order): PurchaseOrder
+    {
+        $logistics = $this->person(Role::LogisticsOfficer);
+        Vendor::factory()->approved()->create(['kind' => 'freight_forwarder']);
+        $rfq = app(SourcingService::class)->sendRfqs($order, $logistics, 'freight')->first();
+        (new SendProcurementMail($order->tenant_id, 'rfq', $rfq->id, $logistics->id))->handle();
+        $document = $this->document($order, D::FreightQuotation);
+        $quote = app(SourcingService::class)->captureFreightQuote($order, $logistics, $rfq->fresh(), ['reference' => 'FREIGHT-1', 'amount' => '100.00', 'currency' => 'USD', 'po_document_id' => $document->id]);
+        app(ShippingService::class)->selectFreight($order, $logistics, $quote->id);
+        $this->approveSubject($order->fresh()->shipment, 'freight');
+
+        return $order->fresh();
+    }
+
+    private function verifiedGrnOrder(): PurchaseOrder
+    {
+        $order = $this->poAtReadyToShip();
+        $order->forceFill(['status' => S::Delivered])->save();
+        $this->document($order, D::CommercialInvoice);
+        $this->document($order, D::AirwayBill);
+        $stores = $this->person(Role::StoreStaff);
+        $receipt = app(ReceivingService::class)->receive($order, $stores, 'GRN-003', [$order->lines->first()->id => 2]);
+        $order = app(ShippingService::class)->issueGrn($order->fresh(), $stores, 'GRN-003');
+        $evidence = $this->document($order, D::DigimaintEvidence);
+        $handover = app(ReceivingService::class)->recordHandover($order, $stores, ['activity' => 'receipt', 'goods_receipt_id' => $receipt->id, 'po_line_id' => $order->lines->first()->id, 'quantity' => 2, 'transaction_reference' => 'DM-GRN-003', 'po_document_id' => $evidence->id, 'performed_at' => now()->toIso8601String()]);
+        app(ReceivingService::class)->verify($handover, $this->person(Role::StoreSupervisor), true, 'Receipt checked');
+
+        return $order->fresh();
     }
 
     public function test_light_route_requires_customs_duty_and_its_documents(): void
     {
-        $po = $this->poAtReadyToShip();
-        $this->shipping->recordShipmentDetails($po, $this->logistics, 10, false);
+        $this->beginProcurement();
+        $order = $this->lightShipment();
+        $this->assertFalse(app(ShippingService::class)->isHeavyOrDangerous($order));
+        $this->expectException(\InvalidArgumentException::class);
 
-        $this->assertFalse($this->shipping->isHeavyOrDangerous($po->fresh()));
-
-        $this->expectException(RuntimeException::class);
-
-        $this->shipping->dispatch($po->fresh(), $this->logistics, 'AWB-1');
+        app(ShippingService::class)->dispatch($order, $this->person(Role::LogisticsOfficer), 'AWB-1');
     }
 
     public function test_light_route_dispatch_succeeds_once_complete(): void
     {
-        $po = $this->poAtReadyToShip();
-        $this->shipping->recordShipmentDetails($po, $this->logistics, 10, false);
-        $po = $po->fresh();
-        $this->shipping->markCustomsDutyPaid($po, $this->logistics);
-        $this->documents->upload($po, D::CustomsDutyReceipt, UploadedFile::fake()->create('duty.pdf', 10), $this->logistics);
-        $this->documents->upload($po, D::AirwayBill, UploadedFile::fake()->create('awb.pdf', 10), $this->logistics);
+        $this->beginProcurement();
+        $order = $this->completeCourierPack($this->lightShipment());
 
-        $po = $this->shipping->dispatch($po->fresh(), $this->logistics, 'AWB-123');
+        $sent = app(ShippingService::class)->dispatch($order, $this->person(Role::LogisticsOfficer), 'AWB-123');
 
-        $this->assertSame(S::InTransit, $po->status);
-        $this->assertSame('AWB-123', $po->awb_number);
+        $this->assertSame(S::InTransit, $sent->status);
+        $this->assertSame('AWB-123', $sent->awb_number);
     }
 
     public function test_heavy_route_does_not_need_customs_duty_but_needs_commercial_invoice(): void
     {
-        $po = $this->poAtReadyToShip();
-        $this->shipping->recordShipmentDetails($po, $this->logistics, 80, false); // over 50kg -> heavy route
-        $po = $po->fresh();
+        $this->beginProcurement();
+        $order = $this->poAtReadyToShip();
+        $order = app(ShippingService::class)->recordShipmentDetails($order, $this->person(Role::LogisticsOfficer), 80, false);
+        $order = $this->approveFreight($order);
+        $this->document($order, D::AirwayBill);
+        $this->expectException(\DomainException::class);
+        $this->expectExceptionMessage('commercial_invoice');
 
-        $this->assertTrue($this->shipping->isHeavyOrDangerous($po));
-
-        $this->expectException(RuntimeException::class);
-
-        $this->shipping->dispatch($po, $this->logistics, 'AWB-1');
+        app(ShippingService::class)->dispatch($order, $this->person(Role::LogisticsOfficer), 'AWB-1');
     }
 
     public function test_heavy_route_dispatch_succeeds_once_complete(): void
     {
-        $po = $this->poAtReadyToShip();
-        $this->shipping->recordShipmentDetails($po, $this->logistics, 5, true); // DG flag alone makes it heavy
-        $po = $po->fresh();
-        $this->documents->upload($po, D::CommercialInvoice, UploadedFile::fake()->create('ci.pdf', 10), $this->logistics);
-        $this->documents->upload($po, D::AirwayBill, UploadedFile::fake()->create('awb.pdf', 10), $this->logistics);
+        $this->beginProcurement();
+        $order = $this->poAtReadyToShip();
+        $order = app(ShippingService::class)->recordShipmentDetails($order, $this->person(Role::LogisticsOfficer), 5, true);
+        $order = $this->approveFreight($order);
+        $this->document($order, D::CommercialInvoice);
+        $this->document($order, D::AirwayBill);
 
-        $po = $this->shipping->dispatch($po->fresh(), $this->logistics, 'AWB-999');
+        $sent = app(ShippingService::class)->dispatch($order, $this->person(Role::LogisticsOfficer), 'AWB-999');
 
-        $this->assertSame(S::InTransit, $po->status);
+        $this->assertSame(S::InTransit, $sent->status);
+        $this->assertFalse($sent->customs_duty_paid);
     }
 
-    public function test_full_receiving_flow_reaches_closed(): void
+    public function test_full_receiving_flow_reaches_grn_registration(): void
     {
-        $po = $this->poAtReadyToShip();
-        $this->shipping->recordShipmentDetails($po, $this->logistics, 10, false);
-        $po = $po->fresh();
-        $this->shipping->markCustomsDutyPaid($po, $this->logistics);
-        $this->documents->upload($po, D::CustomsDutyReceipt, UploadedFile::fake()->create('duty.pdf', 10), $this->logistics);
-        $this->documents->upload($po, D::AirwayBill, UploadedFile::fake()->create('awb.pdf', 10), $this->logistics);
-        $po = $this->shipping->dispatch($po->fresh(), $this->logistics, 'AWB-1');
+        $this->beginProcurement();
+        $order = $this->completeCourierPack($this->lightShipment());
+        $this->document($order, D::CommercialInvoice);
+        $shipping = app(ShippingService::class);
+        $order = $shipping->dispatch($order, $this->person(Role::LogisticsOfficer), 'AWB-1');
+        $order = $shipping->markDelivered($order, $this->person(Role::LogisticsOfficer));
+        app(ReceivingService::class)->receive($order, $this->person(Role::StoreStaff), 'GRN-001', [$order->lines->first()->id => 2]);
 
-        $po = $this->shipping->markDelivered($po, $this->logistics);
-        $this->assertSame(S::Delivered, $po->status);
+        $order = $shipping->issueGrn($order->fresh(), $this->person(Role::StoreStaff), 'GRN-001');
 
-        $po = $this->shipping->confirmReceipt($po, $this->store);
-        $this->assertSame(S::Received, $po->status);
-
-        $po = $this->shipping->issueGrn($po, $this->store, 'GRN-001');
-        $this->assertSame(S::GrnIssued, $po->status);
-        $this->assertSame('GRN-001', $po->grn_number);
+        $this->assertSame(S::GrnIssued, $order->status);
+        $this->assertSame('GRN-001', $order->grn_number);
     }
 
     public function test_close_out_is_blocked_without_label_and_cardex(): void
     {
-        $po = $this->poAtReadyToShip();
-        $po->forceFill(['status' => S::GrnIssued, 'grn_number' => 'GRN-002'])->save();
+        $this->beginProcurement();
+        $order = $this->verifiedGrnOrder();
+        $this->expectException(\DomainException::class);
 
-        $this->expectException(RuntimeException::class);
-
-        $this->shipping->closeOut($po->fresh(), $this->logistics);
+        app(ShippingService::class)->closeOut($order, $this->person(Role::LogisticsOfficer));
     }
 
-    public function test_close_out_succeeds_and_records_the_digimaint_handover(): void
+    public function test_close_out_preserves_the_verified_digimaint_handover(): void
     {
-        $po = $this->poAtReadyToShip();
-        $po->forceFill(['status' => S::GrnIssued, 'grn_number' => 'GRN-003'])->save();
-        $po = $po->fresh();
+        $this->beginProcurement();
+        $order = $this->verifiedGrnOrder();
+        $verifiedAt = $order->digimaint_synced_at->toIso8601String();
+        app(ShippingService::class)->markServiceableLabelApplied($order, $this->person(Role::StoreStaff));
+        app(ShippingService::class)->markCardexSent($order->fresh(), $this->person(Role::LogisticsOfficer));
 
-        $this->shipping->markServiceableLabelApplied($po, $this->store);
-        $this->shipping->markCardexSent($po->fresh(), $this->logistics);
+        $closed = app(ShippingService::class)->closeOut($order->fresh(), $this->person(Role::LogisticsOfficer));
 
-        $po = $this->shipping->closeOut($po->fresh(), $this->logistics);
-
-        $this->assertSame(S::Closed, $po->status);
-        $this->assertNotNull($po->digimaint_synced_at);
+        $this->assertSame(S::Closed, $closed->status);
+        $this->assertSame($verifiedAt, $closed->digimaint_synced_at->toIso8601String());
     }
 
     public function test_an_empty_awb_number_is_rejected(): void
     {
-        $po = $this->poAtReadyToShip();
-        $this->shipping->recordShipmentDetails($po, $this->logistics, 10, false);
-        $po = $po->fresh();
-        $this->shipping->markCustomsDutyPaid($po, $this->logistics);
-        $this->documents->upload($po, D::CustomsDutyReceipt, UploadedFile::fake()->create('duty.pdf', 10), $this->logistics);
-        $this->documents->upload($po, D::AirwayBill, UploadedFile::fake()->create('awb.pdf', 10), $this->logistics);
+        $this->beginProcurement();
+        $order = $this->completeCourierPack($this->lightShipment());
+        $this->expectException(\InvalidArgumentException::class);
 
-        $this->expectException(InvalidArgumentException::class);
-
-        $this->shipping->dispatch($po->fresh(), $this->logistics, '  ');
+        app(ShippingService::class)->dispatch($order, $this->person(Role::LogisticsOfficer), ' ');
     }
 
     public function test_fulfilled_from_stock_closes_without_any_shipping(): void
     {
-        $po = app(RequisitionService::class)->raise('PO-2', $this->logistics, [
-            ['part_number' => 'INSTOCK-1', 'description' => 'Bracket', 'quantity' => 1],
-        ]);
-        $po->forceFill(['status' => S::FulfilledFromStock])->save();
+        $this->beginProcurement();
+        $order = $this->stockCheckedOrder(true);
+        $document = $this->document($order, D::DigimaintEvidence);
+        $handover = app(ReceivingService::class)->recordHandover($order, $this->person(Role::StoreStaff), ['activity' => 'stock_issue', 'po_line_id' => $order->lines->first()->id, 'quantity' => 2, 'transaction_reference' => 'DM-ISSUE-1', 'po_document_id' => $document->id, 'performed_at' => now()->toIso8601String()]);
+        app(ReceivingService::class)->verify($handover, $this->person(Role::StoreSupervisor), true, 'Stock issued to requester');
 
-        $po = $this->shipping->closeFulfilledFromStock($po->fresh(), $this->logistics);
+        $closed = app(ShippingService::class)->closeFulfilledFromStock($order->fresh(), $this->person(Role::LogisticsOfficer));
 
-        $this->assertSame(S::Closed, $po->status);
-        $this->assertNotNull($po->digimaint_synced_at);
+        $this->assertSame(S::Closed, $closed->status);
+        $this->assertNotNull($closed->digimaint_synced_at);
+        $this->assertNull($closed->shipment);
     }
 }

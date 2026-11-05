@@ -5,8 +5,11 @@ namespace App\Http\Controllers;
 use App\Enums\Role;
 use App\Models\User;
 use App\Services\UserManagementService;
+use App\Support\TenantContext;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Crypt;
+use Illuminate\Validation\Rule;
 use InvalidArgumentException;
 
 class UserManagementController extends Controller
@@ -33,7 +36,7 @@ class UserManagementController extends Controller
 
         $data = $request->validate([
             'name' => 'required|string|max:255',
-            'email' => 'required|email|max:255',
+            'email' => ['required', 'email', 'max:255', Rule::unique('users')->where('tenant_id', TenantContext::id())],
             'role' => 'required|string',
         ]);
 
@@ -48,7 +51,7 @@ class UserManagementController extends Controller
 
         return redirect()->route('users.index')->with([
             'status' => 'User created.',
-            'temporary_password' => $result['temporary_password'],
+            'encrypted_temporary_password' => Crypt::encryptString($result['temporary_password']),
             'new_user_email' => $result['user']->email,
         ]);
     }
@@ -89,11 +92,15 @@ class UserManagementController extends Controller
     {
         $this->authorizeAdmin();
 
-        $password = $this->users->resetPassword($user);
+        try {
+            $password = $this->users->resetPassword($user);
+        } catch (InvalidArgumentException $e) {
+            return back()->withErrors(['password' => $e->getMessage()]);
+        }
 
         return back()->with([
             'status' => 'Password reset.',
-            'temporary_password' => $password,
+            'encrypted_temporary_password' => Crypt::encryptString($password),
             'new_user_email' => $user->email,
         ]);
     }

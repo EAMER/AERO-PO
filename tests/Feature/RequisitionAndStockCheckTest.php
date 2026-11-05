@@ -4,16 +4,15 @@ namespace Tests\Feature;
 
 use App\Enums\PurchaseOrderStatus as S;
 use App\Enums\Role;
-use App\Models\Tenant;
 use App\Models\User;
 use App\Services\RequisitionService;
 use App\Support\TenantContext;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use InvalidArgumentException;
-use Tests\TestCase;
+use Tests\ProcurementTestCase;
 
 /** 7.1.1: the stock check is manual - Stores looks each part up in DigiMaint and tells the app the result. */
-class RequisitionAndStockCheckTest extends TestCase
+class RequisitionAndStockCheckTest extends ProcurementTestCase
 {
     use RefreshDatabase;
 
@@ -22,7 +21,7 @@ class RequisitionAndStockCheckTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
-        TenantContext::set(Tenant::create(['name' => 'Aero', 'slug' => 'aero']));
+        $this->beginProcurement();
         $this->requisitions = app(RequisitionService::class);
     }
 
@@ -64,7 +63,7 @@ class RequisitionAndStockCheckTest extends TestCase
         ]);
 
         $availability = $po->lines->mapWithKeys(fn ($l) => [$l->id => true])->all();
-        $po = $this->requisitions->checkStock($po, $this->user(Role::StoreStaff), $availability);
+        $po = $this->checkedStock($this->requisitions, $po, $this->user(Role::StoreStaff), $availability);
 
         $this->assertSame(S::FulfilledFromStock, $po->status);
         $this->assertTrue($po->lines->every(fn ($l) => $l->stock_available === true));
@@ -79,7 +78,7 @@ class RequisitionAndStockCheckTest extends TestCase
 
         $lines = $po->lines;
         $availability = [$lines[0]->id => true, $lines[1]->id => false];
-        $po = $this->requisitions->checkStock($po, $this->user(Role::StoreStaff), $availability);
+        $po = $this->checkedStock($this->requisitions, $po, $this->user(Role::StoreStaff), $availability);
 
         $this->assertSame(S::StockChecked, $po->status);
     }
@@ -95,7 +94,7 @@ class RequisitionAndStockCheckTest extends TestCase
 
         $this->expectException(InvalidArgumentException::class);
 
-        $this->requisitions->checkStock($po, $this->user(Role::StoreStaff), $onlyOneLine);
+        $this->checkedStock($this->requisitions, $po, $this->user(Role::StoreStaff), $onlyOneLine);
     }
 
     public function test_the_short_flow_reaches_quotes_in(): void
@@ -105,9 +104,8 @@ class RequisitionAndStockCheckTest extends TestCase
         ]);
         $logistics = $this->user(Role::LogisticsOfficer);
 
-        $po = $this->requisitions->checkStock($po, $this->user(Role::StoreStaff), [$po->lines->first()->id => false]);
-        $po = $this->requisitions->markRfqSent($po, $logistics);
-        $po = $this->requisitions->markQuotesIn($po, $logistics);
+        $po = $this->checkedStock($this->requisitions, $po, $this->user(Role::StoreStaff), [$po->lines->first()->id => false]);
+        $po = $this->captureQuotesFor($po);
 
         $this->assertSame(S::QuotesIn, $po->status);
     }

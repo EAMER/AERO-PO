@@ -2,137 +2,70 @@
 
 namespace App\Http\Controllers;
 
-use App\Enums\Role;
 use App\Models\PurchaseOrder;
 use App\Services\ShippingService;
+use App\Support\TenantContext;
+use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Auth;
-use InvalidArgumentException;
-use RuntimeException;
+use Illuminate\Validation\Rule;
 
 class ShippingController extends Controller
 {
     public function __construct(private ShippingService $shipping) {}
 
-    public function recordDetails(PurchaseOrder $purchaseOrder, Request $request)
+    public function recordDetails(PurchaseOrder $purchaseOrder, Request $request): RedirectResponse
     {
-        $this->authorizeRole([Role::LogisticsOfficer]);
+        $data = $request->validate(['total_weight_kg' => 'required|numeric|min:0.01|max:99999999.99', 'contains_dg' => 'sometimes|boolean', 'carrier_id' => ['nullable', 'integer', Rule::exists('vendors', 'id')->where('tenant_id', TenantContext::id())]]);
 
-        $data = $request->validate([
-            'total_weight_kg' => 'required|numeric|min:0.01',
-            'contains_dg' => 'sometimes|boolean',
-        ]);
-
-        try {
-            $this->shipping->recordShipmentDetails($purchaseOrder, Auth::user(), (float) $data['total_weight_kg'], $data['contains_dg'] ?? false);
-        } catch (InvalidArgumentException $e) {
-            return back()->withErrors(['shipping' => $e->getMessage()]);
-        }
-
-        return back()->with('status', 'Shipment details recorded.');
+        return $this->complete(fn () => $this->shipping->recordShipmentDetails($purchaseOrder, $request->user(), (float) $data['total_weight_kg'], (bool) ($data['contains_dg'] ?? false), isset($data['carrier_id']) ? (int) $data['carrier_id'] : null));
     }
 
-    public function markCustomsDutyPaid(PurchaseOrder $purchaseOrder)
+    public function markCustomsDutyPaid(PurchaseOrder $purchaseOrder, Request $request): RedirectResponse
     {
-        $this->authorizeRole([Role::LogisticsOfficer]);
-
-        $this->shipping->markCustomsDutyPaid($purchaseOrder, Auth::user());
-
-        return back()->with('status', 'Customs duty marked as paid.');
+        return $this->complete(fn () => $this->shipping->markCustomsDutyPaid($purchaseOrder, $request->user()));
     }
 
-    public function dispatch(PurchaseOrder $purchaseOrder, Request $request)
+    public function dispatch(PurchaseOrder $purchaseOrder, Request $request): RedirectResponse
     {
-        $this->authorizeRole([Role::LogisticsOfficer]);
-
         $data = $request->validate(['awb_number' => 'required|string|max:100']);
 
-        try {
-            $this->shipping->dispatch($purchaseOrder, Auth::user(), $data['awb_number']);
-        } catch (RuntimeException|InvalidArgumentException $e) {
-            return back()->withErrors(['shipping' => $e->getMessage()]);
-        }
-
-        return back()->with('status', 'Shipment dispatched.');
+        return $this->complete(fn () => $this->shipping->dispatch($purchaseOrder, $request->user(), $data['awb_number']));
     }
 
-    public function markDelivered(PurchaseOrder $purchaseOrder)
+    public function markDelivered(PurchaseOrder $purchaseOrder, Request $request): RedirectResponse
     {
-        $this->authorizeRole([Role::LogisticsOfficer]);
-
-        $this->shipping->markDelivered($purchaseOrder, Auth::user());
-
-        return back()->with('status', 'Marked as delivered.');
+        return $this->complete(fn () => $this->shipping->markDelivered($purchaseOrder, $request->user()));
     }
 
-    public function confirmReceipt(PurchaseOrder $purchaseOrder)
+    public function confirmReceipt(PurchaseOrder $purchaseOrder, Request $request): RedirectResponse
     {
-        $this->authorizeRole([Role::StoreStaff, Role::StoreSupervisor]);
-
-        $this->shipping->confirmReceipt($purchaseOrder, Auth::user());
-
-        return back()->with('status', 'Receipt confirmed.');
+        return $this->complete(fn () => $this->shipping->confirmReceipt($purchaseOrder, $request->user()));
     }
 
-    public function issueGrn(PurchaseOrder $purchaseOrder, Request $request)
+    public function issueGrn(PurchaseOrder $purchaseOrder, Request $request): RedirectResponse
     {
-        $this->authorizeRole([Role::StoreStaff, Role::StoreSupervisor, Role::LogisticsOfficer]);
-
         $data = $request->validate(['grn_number' => 'required|string|max:100']);
 
-        try {
-            $this->shipping->issueGrn($purchaseOrder, Auth::user(), $data['grn_number']);
-        } catch (InvalidArgumentException $e) {
-            return back()->withErrors(['shipping' => $e->getMessage()]);
-        }
-
-        return back()->with('status', 'GRN issued.');
+        return $this->complete(fn () => $this->shipping->issueGrn($purchaseOrder, $request->user(), $data['grn_number']));
     }
 
-    public function markServiceableLabelApplied(PurchaseOrder $purchaseOrder)
+    public function markServiceableLabelApplied(PurchaseOrder $purchaseOrder, Request $request): RedirectResponse
     {
-        $this->authorizeRole([Role::StoreStaff, Role::StoreSupervisor]);
-
-        $this->shipping->markServiceableLabelApplied($purchaseOrder, Auth::user());
-
-        return back()->with('status', 'Serviceable label recorded.');
+        return $this->complete(fn () => $this->shipping->markServiceableLabelApplied($purchaseOrder, $request->user()));
     }
 
-    public function markCardexSent(PurchaseOrder $purchaseOrder)
+    public function markCardexSent(PurchaseOrder $purchaseOrder, Request $request): RedirectResponse
     {
-        $this->authorizeRole([Role::LogisticsOfficer]);
-
-        $this->shipping->markCardexSent($purchaseOrder, Auth::user());
-
-        return back()->with('status', 'Cardex marked as sent.');
+        return $this->complete(fn () => $this->shipping->markCardexSent($purchaseOrder, $request->user()));
     }
 
-    public function closeOut(PurchaseOrder $purchaseOrder)
+    public function closeOut(PurchaseOrder $purchaseOrder, Request $request): RedirectResponse
     {
-        $this->authorizeRole([Role::LogisticsOfficer]);
-
-        try {
-            $this->shipping->closeOut($purchaseOrder, Auth::user());
-        } catch (RuntimeException $e) {
-            return back()->withErrors(['shipping' => $e->getMessage()]);
-        }
-
-        return back()->with('status', 'Closed and handed back to DigiMaint.');
+        return $this->complete(fn () => $this->shipping->closeOut($purchaseOrder, $request->user()));
     }
 
-    public function closeFulfilledFromStock(PurchaseOrder $purchaseOrder)
+    public function closeFulfilledFromStock(PurchaseOrder $purchaseOrder, Request $request): RedirectResponse
     {
-        $this->authorizeRole([Role::LogisticsOfficer]);
-
-        $this->shipping->closeFulfilledFromStock($purchaseOrder, Auth::user());
-
-        return back()->with('status', 'Closed and handed back to DigiMaint.');
-    }
-
-    /** @param list<Role> $roles */
-    private function authorizeRole(array $roles): void
-    {
-        $user = Auth::user();
-        abort_unless($user->role->isAdmin() || in_array($user->role, $roles, true), 403);
+        return $this->complete(fn () => $this->shipping->closeFulfilledFromStock($purchaseOrder, $request->user()));
     }
 }

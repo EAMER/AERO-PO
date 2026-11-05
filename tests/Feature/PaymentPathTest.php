@@ -5,138 +5,109 @@ namespace Tests\Feature;
 use App\Enums\DocumentType as D;
 use App\Enums\PurchaseOrderStatus as S;
 use App\Enums\Role;
-use App\Models\Tenant;
-use App\Models\User;
-use App\Services\DocumentService;
+use App\Models\Invoice;
+use App\Models\PurchaseOrder;
+use App\Services\PaymentService;
 use App\Services\RequisitionService;
-use App\Support\TenantContext;
-use Illuminate\Foundation\Testing\RefreshDatabase;
-use Illuminate\Http\UploadedFile;
-use Illuminate\Support\Facades\Storage;
-use InvalidArgumentException;
-use RuntimeException;
-use Tests\TestCase;
+use Tests\ProcurementTestCase;
 
-/** 7.1.4-7.1.8: acknowledgement, and both payment paths (net terms vs cash in advance). */
-class PaymentPathTest extends TestCase
+class PaymentPathTest extends ProcurementTestCase
 {
-    use RefreshDatabase;
-
-    private RequisitionService $requisitions;
-    private DocumentService $documents;
-    private User $logistics;
-
-    protected function setUp(): void
+    private function poAtPoSent(?string $terms = null): PurchaseOrder
     {
-        parent::setUp();
-        Storage::fake('private');
-        TenantContext::set(Tenant::create(['name' => 'Aero', 'slug' => 'aero']));
+        $order = $this->commercialFixture($this->raisedOrder());
+        $order->forceFill(['status' => S::PoSent, 'payment_terms' => $terms, 'po_approved_at' => now(), 'issued_at' => now()])->save();
 
-        $this->requisitions = app(RequisitionService::class);
-        $this->documents = app(DocumentService::class);
-        $this->logistics = User::create(['name' => 'L', 'email' => 'l@aero.test', 'password' => 'x', 'role' => Role::LogisticsOfficer]);
+        return $order->fresh();
     }
 
-    protected function tearDown(): void
+    private function acknowledged(string $terms): PurchaseOrder
     {
-        TenantContext::flush();
-        parent::tearDown();
+        $order = $this->poAtPoSent($terms);
+        $this->document($order, D::AcknowledgedPo);
+
+        return app(RequisitionService::class)->markAcknowledged($order, $this->person(Role::LogisticsOfficer));
     }
 
-    /** A PO sitting at po_sent, as if it had already cleared approvals. */
-    private function poAtPoSent()
+    private function approvedCiaInvoice(PurchaseOrder $order): Invoice
     {
-        $po = $this->requisitions->raise('PO-1', $this->logistics, [
-            ['part_number' => 'SHORT-1', 'description' => 'Gasket', 'quantity' => 1],
-        ]);
-        $po->forceFill(['status' => S::PoSent])->save();
+        $document = $this->document($order, D::ProformaInvoice);
+        $invoice = app(PaymentService::class)->prepare($order, $this->person(Role::LogisticsOfficer), ['reference' => 'PFI-1', 'currency' => 'USD', 'amount' => '20.00', 'po_document_id' => $document->id]);
+        app(PaymentService::class)->submit($invoice, $this->person(Role::LogisticsOfficer));
+        $this->approveSubject($invoice, 'payment_cia');
 
-        return $po->fresh();
+        return $invoice->fresh();
     }
 
     public function test_payment_terms_must_be_net_or_cia(): void
     {
-        $po = $this->poAtPoSent();
+        $this->beginProcurement();
+        $order = $this->poAtPoSent();
+        $this->expectException(\InvalidArgumentException::class);
 
-        $this->expectException(InvalidArgumentException::class);
-
-        $this->requisitions->setPaymentTerms($po, $this->logistics, 'crypto');
+        app(RequisitionService::class)->setPaymentTerms($order, $this->person(Role::LogisticsOfficer), 'crypto');
     }
 
     public function test_acknowledgement_is_blocked_without_payment_terms(): void
     {
-        $po = $this->poAtPoSent();
-        $this->documents->upload($po, D::AcknowledgedPo, UploadedFile::fake()->create('ack.pdf', 10), $this->logistics);
+        $this->beginProcurement();
+        $order = $this->poAtPoSent();
+        $this->document($order, D::AcknowledgedPo);
+        $this->expectException(\DomainException::class);
 
-        $this->expectException(RuntimeException::class);
-
-        $this->requisitions->markAcknowledged($po, $this->logistics);
+        app(RequisitionService::class)->markAcknowledged($order, $this->person(Role::LogisticsOfficer));
     }
 
     public function test_acknowledgement_is_blocked_without_the_document(): void
     {
-        $po = $this->poAtPoSent();
-        $this->requisitions->setPaymentTerms($po, $this->logistics, 'net');
+        $this->beginProcurement();
+        $order = $this->poAtPoSent('net');
+        $this->expectException(\DomainException::class);
 
-        $this->expectException(RuntimeException::class);
-
-        $this->requisitions->markAcknowledged($po, $this->logistics);
+        app(RequisitionService::class)->markAcknowledged($order, $this->person(Role::LogisticsOfficer));
     }
 
     public function test_net_terms_goes_straight_to_ready_to_ship(): void
     {
-        $po = $this->poAtPoSent();
-        $this->requisitions->setPaymentTerms($po, $this->logistics, 'net');
-        $this->documents->upload($po, D::AcknowledgedPo, UploadedFile::fake()->create('ack.pdf', 10), $this->logistics);
-        $po = $this->requisitions->markAcknowledged($po, $this->logistics);
+        $this->beginProcurement();
+        $order = $this->acknowledged('net');
 
-        $this->assertSame(S::Acknowledged, $po->status);
+        $ready = app(RequisitionService::class)->markReadyToShipOnNetTerms($order, $this->person(Role::LogisticsOfficer));
 
-        $po = $this->requisitions->markReadyToShipOnNetTerms($po, $this->logistics);
-
-        $this->assertSame(S::ReadyToShip, $po->status);
+        $this->assertSame(S::ReadyToShip, $ready->status);
+        $this->assertNull($ready->invoice);
     }
 
     public function test_net_terms_po_cannot_use_the_cia_payment_path(): void
     {
-        $po = $this->poAtPoSent();
-        $this->requisitions->setPaymentTerms($po, $this->logistics, 'net');
-        $this->documents->upload($po, D::AcknowledgedPo, UploadedFile::fake()->create('ack.pdf', 10), $this->logistics);
-        $po = $this->requisitions->markAcknowledged($po, $this->logistics);
+        $this->beginProcurement();
+        $order = $this->acknowledged('net');
+        $this->expectException(\DomainException::class);
 
-        $this->expectException(RuntimeException::class);
-
-        $this->requisitions->proceedToPayment($po, $this->logistics);
+        app(RequisitionService::class)->proceedToPayment($order, $this->person(Role::LogisticsOfficer));
     }
 
     public function test_cia_path_requires_proforma_and_telex_before_confirming_payment(): void
     {
-        $po = $this->poAtPoSent();
-        $this->requisitions->setPaymentTerms($po, $this->logistics, 'cia');
-        $this->documents->upload($po, D::AcknowledgedPo, UploadedFile::fake()->create('ack.pdf', 10), $this->logistics);
-        $po = $this->requisitions->markAcknowledged($po, $this->logistics);
-        $po = $this->requisitions->proceedToPayment($po, $this->logistics);
+        $this->beginProcurement();
+        $order = $this->acknowledged('cia');
+        $invoice = $this->approvedCiaInvoice($order);
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('telex');
 
-        $this->assertSame(S::AwaitingPayment, $po->status);
-
-        $this->expectException(RuntimeException::class);
-
-        $this->requisitions->confirmPayment($po, $this->logistics);
+        app(PaymentService::class)->confirm($invoice, $this->person(Role::Treasury), 'PAYMENT-1');
     }
 
     public function test_cia_path_reaches_ready_to_ship_once_payment_is_confirmed(): void
     {
-        $po = $this->poAtPoSent();
-        $this->requisitions->setPaymentTerms($po, $this->logistics, 'cia');
-        $this->documents->upload($po, D::AcknowledgedPo, UploadedFile::fake()->create('ack.pdf', 10), $this->logistics);
-        $po = $this->requisitions->markAcknowledged($po, $this->logistics);
-        $po = $this->requisitions->proceedToPayment($po, $this->logistics);
+        $this->beginProcurement();
+        $order = $this->acknowledged('cia');
+        $invoice = $this->approvedCiaInvoice($order);
+        $this->document($order->fresh(), D::TelexCopy);
 
-        $this->documents->upload($po, D::ProformaInvoice, UploadedFile::fake()->create('pfi.pdf', 10), $this->logistics);
-        $this->documents->upload($po, D::TelexCopy, UploadedFile::fake()->create('telex.pdf', 10), $this->logistics);
+        app(PaymentService::class)->confirm($invoice, $this->person(Role::Treasury), 'PAYMENT-1');
 
-        $po = $this->requisitions->confirmPayment($po, $this->logistics);
-
-        $this->assertSame(S::ReadyToShip, $po->status);
+        $this->assertSame(S::ReadyToShip, $order->fresh()->status);
+        $this->assertSame('paid', $invoice->fresh()->status);
     }
 }

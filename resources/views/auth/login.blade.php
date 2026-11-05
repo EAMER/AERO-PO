@@ -1,47 +1,28 @@
 <x-guest-layout>
-    <!-- Session Status -->
-    <x-auth-session-status class="mb-4" :status="session('status')" />
-
-    <form method="POST" action="{{ route('login') }}">
+    <p class="eyebrow">YOUR WORKSPACE AWAITS</p>
+    <h2 class="signin-title">Welcome back.</h2>
+    <p class="signin-description">Sign in to manage your procurement operations.</p>
+    <x-auth-session-status class="mb-5" :status="session('status')" />
+    <form method="POST" action="{{ route('login') }}" class="signin-form">
         @csrf
-
-        <!-- Email Address -->
         <div>
-            <x-input-label for="email" :value="__('Email')" />
-            <x-text-input id="email" class="block mt-1 w-full" type="email" name="email" :value="old('email')" required autofocus autocomplete="username" />
+            <x-input-label for="email" value="Work email" />
+            <x-text-input id="email" class="mt-2 block w-full" type="email" name="email" :value="old('email')" placeholder="you@your-company.com" required autofocus autocomplete="username" />
             <x-input-error :messages="$errors->get('email')" class="mt-2" />
         </div>
-
-        <!-- Password -->
-        <div class="mt-4">
-            <x-input-label for="password" :value="__('Password')" />
-
-            <x-text-input id="password" class="block mt-1 w-full"
-                            type="password"
-                            name="password"
-                            required autocomplete="current-password" />
-
+        <div x-data="{ showPassword: false }">
+            <x-input-label for="password" value="Password" />
+            <div class="password-field">
+                <x-text-input id="password" class="mt-2 block w-full" type="password" x-bind:type="showPassword ? 'text' : 'password'" name="password" placeholder="Enter your password" required autocomplete="current-password" />
+                <button type="button" @click="showPassword = !showPassword" :aria-pressed="showPassword" :aria-label="showPassword ? 'Hide password' : 'Show password'" x-text="showPassword ? 'Hide' : 'Show'">Show</button>
+            </div>
             <x-input-error :messages="$errors->get('password')" class="mt-2" />
         </div>
-
-        <!-- Remember Me -->
-        <div class="block mt-4">
-            <label for="remember_me" class="inline-flex items-center">
-                <input id="remember_me" type="checkbox" class="rounded border-gray-300 text-indigo-600 shadow-sm focus:ring-indigo-500" name="remember">
-                <span class="ms-2 text-sm text-gray-600">{{ __('Remember me') }}</span>
-            </label>
+        <div class="signin-options">
+            <label for="remember_me"><input id="remember_me" type="checkbox" name="remember" class="brand-checkbox"> Keep me signed in</label>
+            @if(Route::has('password.request'))<a href="{{ route('password.request') }}">Forgot password?</a>@endif
         </div>
-
-        <div class="flex items-center justify-end mt-4">
-            @if (Route::has('password.request'))
-                <a class="underline text-sm text-gray-600 hover:text-gray-900 rounded-md focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500" href="{{ route('password.request') }}">
-                    {{ __('Forgot your password?') }}
-                </a>
-            @endif
-
-            <x-primary-button class="ms-3">
-                {{ __('Log in') }}
-            </x-primary-button>
-        </div>
+        <x-primary-button class="signin-submit">Sign in to workspace <x-icon name="arrow" /></x-primary-button>
     </form>
+    <div class="signin-help"><x-icon name="users" /><p>Need access or a password reset?<br><strong>Contact your company administrator.</strong></p></div>
 </x-guest-layout>

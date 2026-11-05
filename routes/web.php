@@ -5,11 +5,14 @@
 use App\Http\Controllers\ApprovalController;
 use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\DocumentController;
-use App\Http\Controllers\ShippingController;
-use App\Http\Controllers\UserManagementController;
+use App\Http\Controllers\ProcurementController;
 use App\Http\Controllers\ProfileController;
 use App\Http\Controllers\ReportController;
 use App\Http\Controllers\RequisitionController;
+use App\Http\Controllers\ShippingController;
+use App\Http\Controllers\TenantSettingsController;
+use App\Http\Controllers\UserManagementController;
+use App\Http\Controllers\VendorController;
 use Illuminate\Support\Facades\Route;
 
 Route::domain('{tenant}.'.config('tenancy.domain'))
@@ -17,8 +20,22 @@ Route::domain('{tenant}.'.config('tenancy.domain'))
     ->group(function () {
         Route::get('/', fn () => redirect()->route('login'));
 
-        Route::middleware(['auth', 'tenant.user'])->group(function () {
+        Route::middleware(['auth', 'auth.session', 'tenant.user'])->group(function () {
             Route::get('/dashboard', [DashboardController::class, 'index'])->name('dashboard');
+
+            Route::get('/vendors', [VendorController::class, 'index'])->name('vendors.index');
+            Route::post('/vendors', [VendorController::class, 'store'])->name('vendors.store');
+            Route::patch('/vendors/{vendor}', [VendorController::class, 'update'])->name('vendors.update');
+            Route::post('/vendors/{vendor}/approval', [VendorController::class, 'approve'])->name('vendors.approve');
+            Route::get('/settings', [TenantSettingsController::class, 'index'])->name('settings.index');
+            Route::post('/settings/approvers', [TenantSettingsController::class, 'approvers'])->name('settings.approvers');
+            Route::post('/settings/slas', [TenantSettingsController::class, 'slas'])->name('settings.slas');
+            Route::post('/settings/kpis', [TenantSettingsController::class, 'kpi'])->name('settings.kpi');
+            Route::post('/requisitions/{purchaseOrder}/actions/{action}', [ProcurementController::class, 'action'])->name('procurement.action');
+            Route::get('/requisitions/{purchaseOrder}/pdf', [ProcurementController::class, 'pdf'])->name('procurement.pdf');
+            Route::post('/digimaint-handovers/{handover}/verify', [ProcurementController::class, 'verifyHandover'])->name('handover.verify');
+            Route::post('/rfqs/{rfq}/retry', [ProcurementController::class, 'retryRfq'])->name('rfqs.retry');
+            Route::post('/rfqs/{rfq}/withdraw', [ProcurementController::class, 'withdrawRfq'])->name('rfqs.withdraw');
 
             Route::get('/profile', [ProfileController::class, 'edit'])->name('profile.edit');
             Route::patch('/profile', [ProfileController::class, 'update'])->name('profile.update');
@@ -45,6 +62,7 @@ Route::domain('{tenant}.'.config('tenancy.domain'))
 
             Route::post('/approvals/{approval}/approve', [ApprovalController::class, 'approve'])->name('approvals.approve');
             Route::post('/approvals/{approval}/reject', [ApprovalController::class, 'reject'])->name('approvals.reject');
+            Route::post('/approvals/{approval}/return', [ApprovalController::class, 'returnForCorrection'])->name('approvals.return');
             Route::post('/approvals/{approval}/query', [ApprovalController::class, 'query'])->name('approvals.query');
             Route::post('/approval-queries/{approvalQuery}/answer', [ApprovalController::class, 'answerQuery'])->name('approvals.queries.answer');
 

@@ -3,13 +3,14 @@
 namespace App\Support;
 
 use App\Enums\DocumentType as D;
+use App\Services\DocumentChecklistService;
 
 /**
  * Which documents must exist, and how many, before a PO can move past a
  * given checklist stage. Only 'evaluation_pack' (manual 7.1.2) is wired up
  * this sprint; the others are placeholders for Sprint 2/3.
  *
- * @see \App\Services\DocumentChecklistService
+ * @see DocumentChecklistService
  */
 class RequiredDocuments
 {
@@ -23,7 +24,7 @@ class RequiredDocuments
                 D::Quotation->value => 3,           // manual 7.1.2: at least 3 best quotes
                 D::ProvisioningRequisition->value => 1,
                 D::NegotiationEmail->value => 1,
-                // Certificate: "if available" in the manual - not required.
+                D::Certificate->value => 1,
             ],
             'acknowledgement' => [
                 D::AcknowledgedPo->value => 1,
@@ -42,7 +43,8 @@ class RequiredDocuments
                 D::CommercialInvoice->value => 1,
                 D::AirwayBill->value => 1,
             ],
-            default => [],
+            'receiving' => [D::AirwayBill->value => 1, D::CommercialInvoice->value => 1, D::Certificate->value => 1],
+            default => throw new \InvalidArgumentException('Unknown document checklist stage.'),
         };
     }
 }

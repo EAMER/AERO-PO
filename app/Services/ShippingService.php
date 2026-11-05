@@ -2,84 +2,116 @@
 
 namespace App\Services;
 
+use App\Enums\DocumentType;
 use App\Enums\PurchaseOrderStatus as S;
+use App\Enums\Role;
 use App\Models\PurchaseOrder;
+use App\Models\Shipment;
 use App\Models\User;
+use App\Models\Vendor;
+use App\Support\ProcurementAccess as Access;
+use Illuminate\Support\Facades\DB;
 use InvalidArgumentException;
-use RuntimeException;
 
-/**
- * Manual 7.1.9-7.1.20: courier vs freight-forwarder shipping, customs duty,
- * receipt, GRN, serviceable label, Cardex, and close-out. The DigiMaint
- * handover at the end is recorded here, not yet integrated with DigiMaint
- * itself (see RequisitionService::checkStock for the entry-side equivalent).
- */
 class ShippingService
 {
     public function __construct(private WorkflowService $workflow, private DocumentChecklistService $checklist) {}
 
-    /** Logistics records the shipment's weight and DG status - this decides the route. */
-    public function recordShipmentDetails(PurchaseOrder $po, User $actor, float $weightKg, bool $containsDg): PurchaseOrder
+    public function recordShipmentDetails(PurchaseOrder $po, User $actor, float $weightKg, bool $containsDg, ?int $carrierId = null): PurchaseOrder
     {
-        if ($weightKg <= 0) {
-            throw new InvalidArgumentException('Weight must be greater than zero.');
-        }
+        Access::roles($actor, Role::LogisticsOfficer);
 
-        $po->update(['total_weight_kg' => $weightKg, 'contains_dg' => $containsDg]);
+        return DB::transaction(function () use ($po, $actor, $weightKg, $containsDg, $carrierId) {
+            $po = PurchaseOrder::whereKey($po->id)->lockForUpdate()->firstOrFail();
+            if ($po->status !== S::ReadyToShip || ! is_finite($weightKg) || $weightKg < 0.01 || $weightKg > 99999999.99) {
+                throw new InvalidArgumentException('Record a valid shipment weight while the order is ready to ship.');
+            }
+            $shipment = $po->shipment;
+            if ($shipment && ($shipment->status !== 'draft' || $shipment->rfqs()->exists())) {
+                throw new InvalidArgumentException('Freight already under sourcing or approval cannot be changed.');
+            }
+            $heavy = $containsDg || $weightKg >= 50;
+            $carrier = $carrierId ? Vendor::whereKey($carrierId)->where('kind', 'courier')->where('is_active', true)->where('is_approved', true)->firstOrFail() : null;
+            if (! $heavy && ! $carrier) {
+                throw new InvalidArgumentException('Select an approved courier account for a light non-DG shipment.');
+            }
+            $shipment = Shipment::updateOrCreate(['purchase_order_id' => $po->id], ['route' => $heavy ? 'freight_forwarder' : 'courier', 'weight_kg' => $weightKg, 'contains_dg' => $containsDg, 'carrier_id' => $heavy ? null : $carrier->id, 'status' => 'draft']);
+            $po->update(['total_weight_kg' => $weightKg, 'contains_dg' => $containsDg]);
+            Access::audit($po, $actor, 'shipment.prepared', [], $shipment->getAttributes());
 
-        return $po->fresh();
+            return $po->fresh();
+        });
     }
 
     public function isHeavyOrDangerous(PurchaseOrder $po): bool
     {
-        return $po->contains_dg || (float) $po->total_weight_kg > 50;
+        return $po->contains_dg || (float) $po->total_weight_kg >= 50;
     }
 
-    private function shippingStage(PurchaseOrder $po): string
-    {
-        return $this->isHeavyOrDangerous($po) ? 'shipping_heavy' : 'shipping_light';
-    }
-
-    /** @return list<string> */
     public function missingShippingDocuments(PurchaseOrder $po): array
     {
-        return $this->checklist->missing($po, $this->shippingStage($po));
+        return $this->checklist->missing($po, $this->isHeavyOrDangerous($po) ? 'shipping_heavy' : 'shipping_light');
     }
 
-    /**
-     * 7.1.9/7.1.11: dispatch the shipment. Requires weight/DG recorded, the
-     * route-appropriate documents, customs duty paid (light route only -
-     * the manual ties duty to the courier path), and an AWB number.
-     */
+    public function selectFreight(PurchaseOrder $order, User $actor, int $quoteId): void
+    {
+        Access::roles($actor, Role::LogisticsOfficer);
+        DB::transaction(function () use ($order, $actor, $quoteId) {
+            $order = PurchaseOrder::whereKey($order->id)->lockForUpdate()->firstOrFail();
+            $shipment = $order->shipment;
+            if ($order->status !== S::ReadyToShip || ! $shipment || $shipment->route !== 'freight_forwarder' || ! in_array($shipment->status, ['draft', 'returned'], true)) {
+                throw new InvalidArgumentException('Select a freight quotation for a draft or returned freight shipment.');
+            }
+            $quote = $shipment->quotes()->with('vendor')->findOrFail($quoteId);
+            if (! $quote->vendor->is_approved || ! $quote->vendor->is_active) {
+                throw new InvalidArgumentException('The freight forwarder must still be approved and active.');
+            }
+            $before = $shipment->only(['carrier_id', 'currency', 'freight_minor']);
+            $shipment->update(['carrier_id' => $quote->vendor_id, 'selected_quote_id' => $quote->id, 'currency' => $quote->currency, 'freight_minor' => $quote->amount_minor, 'status' => 'pending_approval']);
+            Access::amount($shipment, $actor, 'freight.selected', $before, $shipment->only(['carrier_id', 'currency', 'freight_minor']), 'Freight quotation selected');
+            app(ApprovalService::class)->request($shipment, app(TenantSettingsService::class)->rolesFor('freight'), 'freight');
+        });
+    }
+
     public function dispatch(PurchaseOrder $po, User $actor, string $awbNumber): PurchaseOrder
     {
-        if (is_null($po->total_weight_kg)) {
-            throw new RuntimeException('Record the shipment weight and DG status before dispatch.');
-        }
+        Access::roles($actor, Role::LogisticsOfficer);
 
-        if (! $this->isHeavyOrDangerous($po) && ! $po->customs_duty_paid) {
-            throw new RuntimeException('Customs duty must be paid before a courier shipment can dispatch.');
-        }
+        return DB::transaction(function () use ($po, $actor, $awbNumber) {
+            $po = PurchaseOrder::whereKey($po->id)->lockForUpdate()->firstOrFail();
+            $shipment = $po->shipment;
+            if ($po->status !== S::ReadyToShip || ! $shipment || trim($awbNumber) === '' || ! $shipment->carrier?->is_approved || ! $shipment->carrier?->is_active) {
+                throw new InvalidArgumentException('A ready order, approved carrier, shipment details, and AWB number are required.');
+            }
+            if (($shipment->route === 'freight_forwarder' && $shipment->status !== 'approved') || ($shipment->route === 'courier' && ! $shipment->customs_duty_paid)) {
+                throw new InvalidArgumentException('Complete TLM freight approval or the courier customs-duty payment before dispatch.');
+            }
+            $missing = $this->missingShippingDocuments($po);
+            if ($missing !== []) {
+                throw new \DomainException('Shipping documents incomplete: '.implode(', ', $missing));
+            }
+            $shipment->update(['awb_number' => $awbNumber, 'status' => 'dispatched']);
+            $po->update(['awb_number' => $awbNumber]);
 
-        $missing = $this->missingShippingDocuments($po);
-        if ($missing !== []) {
-            throw new RuntimeException('Shipping documents incomplete: '.implode(', ', $missing));
-        }
-
-        if (trim($awbNumber) === '') {
-            throw new InvalidArgumentException('An AWB number is required.');
-        }
-
-        $po->update(['awb_number' => $awbNumber]);
-
-        return $this->workflow->transition($po, S::InTransit, $actor, "Dispatched, AWB {$awbNumber}");
+            return $this->workflow->transition($po, S::InTransit, $actor, 'Dispatched, AWB '.$awbNumber);
+        });
     }
 
     public function markCustomsDutyPaid(PurchaseOrder $po, User $actor): PurchaseOrder
     {
-        $po->update(['customs_duty_paid' => true]);
+        Access::roles($actor, Role::LogisticsOfficer);
 
-        return $po->fresh();
+        return DB::transaction(function () use ($po, $actor) {
+            $po = PurchaseOrder::whereKey($po->id)->lockForUpdate()->firstOrFail();
+            if ($po->status !== S::ReadyToShip || ! $po->shipment || ! $po->documents()->where('type', DocumentType::CustomsDutyReceipt)->exists()) {
+                throw new InvalidArgumentException('Upload the customs-duty receipt for a shipment ready to dispatch.');
+            }
+            $po->shipment->update(['customs_duty_paid' => true]);
+            $po->update(['customs_duty_paid' => true]);
+            Access::audit($po, $actor, 'customs.paid');
+
+            return $po;
+        });
     }
 
     public function markDelivered(PurchaseOrder $po, User $actor): PurchaseOrder
@@ -87,65 +119,83 @@ class ShippingService
         return $this->workflow->transition($po, S::Delivered, $actor);
     }
 
-    /** 7.1.15: Stores confirms the item physically arrived. */
     public function confirmReceipt(PurchaseOrder $po, User $actor): PurchaseOrder
     {
-        return $this->workflow->transition($po, S::Received, $actor, 'Confirmed by stores');
+        Access::roles($actor, Role::StoreStaff, Role::StoreSupervisor);
+        throw new InvalidArgumentException('Use the receiving form to record actual quantities and a GRN.');
     }
 
-    /** 7.1.17: shipment documents registered and given a GRN number. */
     public function issueGrn(PurchaseOrder $po, User $actor, string $grnNumber): PurchaseOrder
     {
-        if (trim($grnNumber) === '') {
-            throw new InvalidArgumentException('A GRN number is required.');
-        }
+        Access::roles($actor, Role::StoreStaff, Role::StoreSupervisor);
 
-        $po->update(['grn_number' => $grnNumber]);
+        return DB::transaction(function () use ($po, $actor, $grnNumber) {
+            $po = PurchaseOrder::whereKey($po->id)->lockForUpdate()->firstOrFail();
+            if ($po->status !== S::Received || ! $po->receipts()->where('grn_number', $grnNumber)->exists() || ! app(ReceivingService::class)->fullyReceived($po)) {
+                throw new InvalidArgumentException('Complete Stores receipt and use its recorded GRN number.');
+            }
+            $po->update(['grn_number' => $grnNumber]);
 
-        return $this->workflow->transition($po, S::GrnIssued, $actor, "GRN {$grnNumber}");
+            return $this->workflow->transition($po, S::GrnIssued, $actor, 'GRN '.$grnNumber);
+        });
     }
 
-    /** 7.1.19: serviceable label prepared and placed on the item. */
     public function markServiceableLabelApplied(PurchaseOrder $po, User $actor): PurchaseOrder
     {
-        $po->update(['serviceable_label_applied_at' => now()]);
+        Access::roles($actor, Role::StoreStaff, Role::StoreSupervisor);
 
-        return $po->fresh();
+        return $this->completeCloseTask($po, $actor, 'serviceable_label_applied_at');
     }
 
-    /** 7.1.20: Cardex prepared and sent to the end user. */
     public function markCardexSent(PurchaseOrder $po, User $actor): PurchaseOrder
     {
-        $po->update(['cardex_sent_at' => now()]);
+        Access::roles($actor, Role::LogisticsOfficer);
 
-        return $po->fresh();
+        return $this->completeCloseTask($po, $actor, 'cardex_sent_at');
     }
 
-    /**
-     * Close the PO out. This is also the DigiMaint handover point (manual
-     * 7.1.18): the item goes back into DigiMaint as available stock. Today
-     * that's a manual confirmation, not an API call - see the project's
-     * open DigiMaint-integration question.
-     */
     public function closeOut(PurchaseOrder $po, User $actor): PurchaseOrder
     {
-        if (is_null($po->serviceable_label_applied_at)) {
-            throw new RuntimeException('Apply the serviceable label before closing the PO.');
-        }
-        if (is_null($po->cardex_sent_at)) {
-            throw new RuntimeException('Send the Cardex before closing the PO.');
-        }
+        Access::roles($actor, Role::LogisticsOfficer);
 
-        $po->update(['digimaint_synced_at' => now()]);
+        return DB::transaction(function () use ($po, $actor) {
+            $po = PurchaseOrder::whereKey($po->id)->lockForUpdate()->firstOrFail();
+            if ($po->status !== S::GrnIssued || ! $po->serviceable_label_applied_at || ! $po->cardex_sent_at || ! app(ReceivingService::class)->handoverComplete($po, 'receipt')) {
+                throw new \DomainException('Complete the GRN, verified DigiMaint receipts, serviceable label, and Cardex before closure.');
+            }
 
-        return $this->workflow->transition($po, S::Closed, $actor, 'Handed over to DigiMaint');
+            return $this->workflow->transition($po, S::Closed, $actor, 'Verified manual DigiMaint receipt and close-out');
+        });
     }
 
-    /** For lines fulfilled directly from existing stock - no shipping needed at all. */
     public function closeFulfilledFromStock(PurchaseOrder $po, User $actor): PurchaseOrder
     {
-        $po->update(['digimaint_synced_at' => now()]);
+        Access::roles($actor, Role::LogisticsOfficer);
 
-        return $this->workflow->transition($po, S::Closed, $actor, 'Fulfilled from existing stock');
+        return DB::transaction(function () use ($po, $actor) {
+            $po = PurchaseOrder::whereKey($po->id)->lockForUpdate()->firstOrFail();
+            if ($po->status !== S::FulfilledFromStock || ! app(ReceivingService::class)->handoverComplete($po, 'stock_issue')) {
+                throw new \DomainException('Verify the actual DigiMaint stock issue for every line before closure.');
+            }
+
+            return $this->workflow->transition($po, S::Closed, $actor, 'Fulfilled from stock; manual issue verified');
+        });
+    }
+
+    private function completeCloseTask(PurchaseOrder $po, User $actor, string $field): PurchaseOrder
+    {
+        return DB::transaction(function () use ($po, $actor, $field) {
+            $po = PurchaseOrder::whereKey($po->id)->lockForUpdate()->firstOrFail();
+            if ($po->status !== S::GrnIssued || ! app(ReceivingService::class)->handoverComplete($po, 'receipt')) {
+                throw new InvalidArgumentException('Issue the GRN and verify the manual DigiMaint receipts first.');
+            }
+            if ($po->$field) {
+                throw new InvalidArgumentException('This close-out action is already recorded.');
+            }
+            $po->update([$field => now()]);
+            Access::audit($po, $actor, 'close_out.'.$field);
+
+            return $po;
+        });
     }
 }

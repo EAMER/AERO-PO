@@ -2,14 +2,16 @@
 
 namespace App\Http\Controllers;
 
-use App\Enums\ApprovalDecision;
 use App\Models\Approval;
 use App\Models\ApprovalQuery;
 use App\Models\User;
 use App\Services\ApprovalService;
+use App\Support\TenantContext;
 use Illuminate\Auth\Access\AuthorizationException;
+use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Validation\Rule;
 use InvalidArgumentException;
 
 class ApprovalController extends Controller
@@ -30,10 +32,17 @@ class ApprovalController extends Controller
         return $this->act(fn () => $this->approvals->reject($approval, Auth::user(), $data['reason']), $approval);
     }
 
+    public function returnForCorrection(Approval $approval, Request $request): RedirectResponse
+    {
+        $data = $request->validate(['reason' => 'required|string|max:1000']);
+
+        return $this->act(fn () => $this->approvals->returnForCorrection($approval, $request->user(), $data['reason']), $approval);
+    }
+
     public function query(Approval $approval, Request $request)
     {
         $data = $request->validate([
-            'target_user_id' => 'required|exists:users,id',
+            'target_user_id' => ['required', Rule::exists('users', 'id')->where('tenant_id', TenantContext::id())->where('is_active', true)],
             'question' => 'required|string|max:1000',
         ]);
 
@@ -46,12 +55,12 @@ class ApprovalController extends Controller
     {
         $data = $request->validate(['answer' => 'required|string|max:2000']);
 
-        return $this->act(fn () => $this->approvals->answerQuery($approvalQuery, Auth::user(), $data['answer']), null, $approvalQuery->approval->approvable_id);
+        return $this->act(fn () => $this->approvals->answerQuery($approvalQuery, Auth::user(), $data['answer']), null, $approvalQuery->approval->order()->id);
     }
 
     private function act(callable $fn, ?Approval $approval, ?int $poIdFallback = null)
     {
-        $poId = $approval?->approvable_id ?? $poIdFallback;
+        $poId = $approval?->order()?->id ?? $poIdFallback;
 
         try {
             $fn();

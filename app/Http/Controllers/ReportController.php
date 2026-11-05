@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Enums\Role;
+use App\Models\DigimaintHandover;
 use App\Services\ReportService;
 use Illuminate\Support\Facades\Auth;
 
@@ -23,6 +24,10 @@ class ReportController extends Controller
             'averageCycleDays' => $this->reports->averageCycleDays(),
             'stages' => $this->reports->averageDaysPerStage(),
             'longestWaiting' => $this->reports->longestWaiting(),
+            'stageTimers' => $this->reports->stageTimers(),
+            'approvalTimers' => $this->reports->approvalTimers(),
+            'kpis' => $this->reports->kpis(),
+            'pendingHandovers' => DigimaintHandover::with('purchaseOrder')->whereIn('status', ['recorded', 'exception'])->latest()->limit(50)->get(),
         ]);
     }
 }

@@ -3,51 +3,37 @@
 namespace App\Http\Controllers;
 
 use App\Enums\DocumentType;
-use App\Enums\Role;
 use App\Models\PoDocument;
 use App\Models\PurchaseOrder;
 use App\Services\DocumentService;
+use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Auth;
+use Illuminate\Validation\Rule;
+use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class DocumentController extends Controller
 {
     public function __construct(private DocumentService $documents) {}
 
-    public function store(Request $request, PurchaseOrder $purchaseOrder)
+    public function store(Request $request, PurchaseOrder $purchaseOrder): RedirectResponse
     {
-        $user = Auth::user();
-        abort_unless($user->role->isAdmin() || $user->role === Role::LogisticsOfficer, 403);
+        $this->authorize('view', $purchaseOrder);
+        $data = $request->validate(['type' => ['required', Rule::enum(DocumentType::class)], 'file' => 'required|file|max:20480']);
 
-        $data = $request->validate([
-            'type' => 'required|string',
-            'file' => 'required|file',
-        ]);
-
-        $type = DocumentType::tryFrom($data['type']);
-        abort_unless($type, 422, 'Unknown document type.');
-
-        try {
-            $this->documents->upload($purchaseOrder, $type, $request->file('file'), $user);
-        } catch (\InvalidArgumentException $e) {
-            return back()->withErrors(['file' => $e->getMessage()]);
-        }
-
-        return back()->with('status', 'Document uploaded.');
+        return $this->complete(fn () => $this->documents->upload($purchaseOrder, DocumentType::from($data['type']), $request->file('file'), $request->user()));
     }
 
-    public function download(PoDocument $poDocument)
+    public function download(PoDocument $poDocument): StreamedResponse
     {
+        $this->authorize('view', $poDocument->purchaseOrder);
+
         return $this->documents->download($poDocument);
     }
 
-    public function destroy(PoDocument $poDocument)
+    public function destroy(PoDocument $poDocument, Request $request): RedirectResponse
     {
-        $user = Auth::user();
-        abort_unless($user->role->isAdmin() || $user->role === Role::LogisticsOfficer, 403);
+        $this->authorize('source', $poDocument->purchaseOrder);
 
-        $this->documents->delete($poDocument);
-
-        return back()->with('status', 'Document removed.');
+        return $this->complete(fn () => $this->documents->delete($poDocument, $request->user()));
     }
 }

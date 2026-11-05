@@ -14,6 +14,7 @@ use App\Services\WorkflowService;
 use App\Support\TenantContext;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Storage;
 use InvalidArgumentException;
 use Tests\TestCase;
 
@@ -23,11 +24,13 @@ class ApprovalActionsTest extends TestCase
     use RefreshDatabase;
 
     private PurchaseOrder $po;
+
     private ApprovalService $approvals;
 
     protected function setUp(): void
     {
         parent::setUp();
+        Storage::fake('private');
         TenantContext::set(Tenant::create(['name' => 'Aero', 'slug' => 'aero']));
 
         $wf = app(WorkflowService::class);
@@ -39,6 +42,7 @@ class ApprovalActionsTest extends TestCase
         $po = $wf->transition($po, S::RfqSent, $logistics);
         $po = $wf->transition($po, S::QuotesIn, $logistics);
         $this->po = $wf->transition($po, S::PendingApproval, $logistics);
+        $this->po = $this->commercialFixture($this->po);
 
         $this->approvals = app(ApprovalService::class);
         $this->approvals->request($this->po, [Role::Tlm, Role::Hamo, Role::TechnicalDirector]);
@@ -65,7 +69,7 @@ class ApprovalActionsTest extends TestCase
 
     // ---- approve ----
 
-    public function test_full_chain_ends_at_po_sent(): void
+    public function test_full_chain_reaches_cfo_approved_before_separate_dispatch(): void
     {
         $this->approvals->approve($this->step(1), $this->user(Role::Tlm));
         $this->assertSame(S::PendingApproval, $this->po->fresh()->status);
@@ -75,7 +79,7 @@ class ApprovalActionsTest extends TestCase
         $this->assertSame(S::PendingCfo, $this->po->fresh()->status);
 
         $this->approvals->approve($this->step(1, 'cfo'), $this->user(Role::Cfo));
-        $this->assertSame(S::PoSent, $this->po->fresh()->status);
+        $this->assertSame(S::PoApproved, $this->po->fresh()->status);
     }
 
     public function test_steps_must_be_decided_in_order(): void
